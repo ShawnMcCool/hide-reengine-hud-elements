@@ -1,6 +1,6 @@
 -- REFramework stubs for desktop testing.
 --
--- Provides the globals hud_element_hider.lua expects, captures the callbacks
+-- Provides the globals hide_reengine_hud_elements.lua expects, captures the callbacks
 -- it registers, and records what it logged and dumped. Loading the real file
 -- against these is itself the most valuable test: a logger that throws on load
 -- wastes an entire play session, and play sessions are the scarce resource.
@@ -34,8 +34,8 @@ function M.install(opts)
 
     _G.json = {
         load_file = function(name)
-            if name == "hud_element_hider.json" then return env.config_file end
-            if name == "hud_element_hider_list.json" then return opts.hide_list end
+            if name == "hide_reengine_hud_elements.json" then return env.config_file end
+            if name == "hide_reengine_hud_elements_list.json" then return opts.hide_list end
             return opts.files and opts.files[name] or nil
         end,
         dump_file = function(name, tbl)

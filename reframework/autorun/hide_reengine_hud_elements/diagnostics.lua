@@ -1,4 +1,4 @@
--- HUD Element Hider -- diagnostics
+-- Hide RE Engine HUD Elements -- diagnostics
 --
 -- Everything the mod learns about the game it is running in, and nothing the
 -- product needs to work: the probes, their traces, and the dump.
@@ -51,7 +51,7 @@ function M.new(deps)
     self.run_probe = run_probe
 
     -- The module search path, recorded because the mod's own require of
-    -- hud_element_hider.pure depends on it. There is no probe testing whether
+    -- hide_reengine_hud_elements.pure depends on it. There is no probe testing whether
     -- require works: this file is itself required at load, so if that were
     -- broken nothing here would be running.
     local function probe_modules()

@@ -1,4 +1,4 @@
--- Unit tests for reframework/autorun/hud_element_hider.lua
+-- Unit tests for reframework/autorun/hide_reengine_hud_elements.lua
 --
 -- Run with tools/run-tests. Lua 5.4 explicitly: REFramework embeds 5.4 and the
 -- system lua is 5.5.
@@ -26,7 +26,7 @@ local function group(name) io.write(name, "\n") end
 
 local function load_logger(opts)
     local env = stub.install(opts)
-    local chunk, err = loadfile("reframework/autorun/hud_element_hider.lua")
+    local chunk, err = loadfile("reframework/autorun/hide_reengine_hud_elements.lua")
     if chunk == nil then error("loadfile failed: " .. tostring(err)) end
     local ok, result = pcall(chunk)
     return env, ok, result
@@ -180,13 +180,13 @@ group("output")
 -- ---------------------------------------------------------------------------
 local dumped
 for _, d in ipairs(env2.dumps) do
-    if d.name == "hud_element_hider_diagnostics.json" then dumped = d.data end
+    if d.name == "hide_reengine_hud_elements_diagnostics.json" then dumped = d.data end
 end
 if dumped == nil then
     -- Force one through the panel's Dump now path by running enough frames.
     for _ = 1, 600 do env2.callbacks.on_frame() end
     for _, d in ipairs(env2.dumps) do
-        if d.name == "hud_element_hider_diagnostics.json" then dumped = d.data end
+        if d.name == "hide_reengine_hud_elements_diagnostics.json" then dumped = d.data end
     end
 end
 check("an output dump was produced", dumped ~= nil)
@@ -386,7 +386,7 @@ check("a failing imgui overlay does not propagate", ok7, ferr)
 eq("failure reverts to the draw overlay", L7.cfg.overlay_style, "draw")
 local saved
 for _, d in ipairs(env7.dumps) do
-    if d.name == "hud_element_hider.json" then saved = d.data end
+    if d.name == "hide_reengine_hud_elements.json" then saved = d.data end
 end
 check("the revert is saved to config", saved ~= nil and saved.overlay_style == "draw",
     saved and saved.overlay_style)
@@ -510,7 +510,7 @@ env8.restore()
 group("panel list actions")
 -- ---------------------------------------------------------------------------
 local env9, ok9, L9 = load_logger({ files = {
-    ["friend.hudlist.json"] = { format = "hud-element-hider-list", version = 1,
+    ["friend.hudlist.json"] = { format = "hide-reengine-hud-elements-list", version = 1,
         entries = { { name = "GUI099999", label = "someone else's find", on = true } } },
 } })
 check("ninth instance loads", ok9, ok9 and "" or L9)
@@ -525,7 +525,7 @@ eq("added element stops drawing",
 
 local persisted
 for _, d in ipairs(env9.dumps) do
-    if d.name == "hud_element_hider_list.json" then persisted = d.data end
+    if d.name == "hide_reengine_hud_elements_list.json" then persisted = d.data end
 end
 check("the list is written to its own file",
     persisted ~= nil and persisted[1] ~= nil and persisted[1].name == "GUI020102")
@@ -544,15 +544,15 @@ env9.opts.click = "Save##export"
 pcall(env9.callbacks.on_draw_ui)
 local exported
 for _, d in ipairs(env9.dumps) do
-    if d.name ~= "hud_element_hider.json"
-        and d.name ~= "hud_element_hider_list.json"
-        and d.name ~= "hud_element_hider_diagnostics.json" then
+    if d.name ~= "hide_reengine_hud_elements.json"
+        and d.name ~= "hide_reengine_hud_elements_list.json"
+        and d.name ~= "hide_reengine_hud_elements_diagnostics.json" then
         exported = d.data
     end
 end
 check("export wrote a list file", exported ~= nil)
 if exported ~= nil then
-    eq("export is tagged with the format", exported.format, "hud-element-hider-list")
+    eq("export is tagged with the format", exported.format, "hide-reengine-hud-elements-list")
     eq("export carries both entries", #exported.entries, 2)
     eq("export carries labels", exported.entries[2].label, "someone else's find")
 end

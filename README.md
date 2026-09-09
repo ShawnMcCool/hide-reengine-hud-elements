@@ -1,4 +1,4 @@
-# HUD Element Hider
+# Hide RE Engine HUD Elements
 
 A REFramework mod that lets you switch off any on-screen GUI element you don't
 want to look at — a prompt that keeps appearing over enemies, a banner that
@@ -34,15 +34,15 @@ keeping the folder structure. You should end up with:
   dinput8.dll                                  <- REFramework, already there
   reframework/
     autorun/
-      hud_element_hider.lua
-      hud_element_hider/
+      hide_reengine_hud_elements.lua
+      hide_reengine_hud_elements/
         pure.lua
         diagnostics.lua
 ```
 
-Both parts matter. `hud_element_hider.lua` must sit **directly** in `autorun/`,
+Both parts matter. `hide_reengine_hud_elements.lua` must sit **directly** in `autorun/`,
 which is what REFramework executes. The two modules must sit in the
-`hud_element_hider/` subdirectory, because REFramework runs everything directly
+`hide_reengine_hud_elements/` subdirectory, because REFramework runs everything directly
 in `autorun/` and a module run on its own does nothing.
 
 Finding your game directory: in Steam, right-click the game → Manage → Browse
@@ -63,11 +63,11 @@ with Insert, it is already set.
 ## Opening it
 
 **Insert** opens the REFramework window. Expand **ScriptRunner**, then
-**HUD Element Hider**.
+**Hide RE Engine HUD Elements**.
 
 If the panel is not there, check `re2_framework_log.txt` in the game directory —
 it is rewritten every launch and will say whether the script loaded. Lines from
-this mod are tagged `[HUD Element Hider]`.
+this mod are tagged `[Hide RE Engine HUD Elements]`.
 
 ## Using it
 
@@ -152,9 +152,9 @@ All in the game's `reframework/data/`:
 
 | File | What |
 |---|---|
-| `hud_element_hider.json` | Settings |
-| `hud_element_hider_list.json` | Your hide list. This is the one to share. |
-| `hud_element_hider_diagnostics.json` | What the mod detected about the game |
+| `hide_reengine_hud_elements.json` | Settings |
+| `hide_reengine_hud_elements_list.json` | Your hide list. This is the one to share. |
+| `hide_reengine_hud_elements_diagnostics.json` | What the mod detected about the game |
 
 The hide list is deliberately separate from the settings so you can send it to
 someone without sending your overlay preferences too. It is plain json: a bare
@@ -214,7 +214,7 @@ The **Diagnostics** section reports what the mod detected. If you're filing an
 issue, that's the useful part to include.
 ## Uninstalling
 
-Delete `hud_element_hider.lua` and the `hud_element_hider/` folder from
+Delete `hide_reengine_hud_elements.lua` and the `hide_reengine_hud_elements/` folder from
 `reframework/autorun/`. Everything the mod hid comes back on the next launch.
 
 Your hide list is left in `reframework/data/` and is picked up again if you

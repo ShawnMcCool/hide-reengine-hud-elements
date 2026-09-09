@@ -1,4 +1,4 @@
--- HUD Element Hider
+-- Hide RE Engine HUD Elements
 -- A REFramework Lua mod for RE Engine games, developed against
 -- Onimusha: Way of the Sword.
 --
@@ -11,24 +11,24 @@
 -- else, which is the other half: lists export and import, so identifying an
 -- element is work one person does and everyone benefits from.
 --
--- Menu: REFramework -> ScriptRunner -> HUD Element Hider. Insert opens it.
+-- Menu: REFramework -> ScriptRunner -> Hide RE Engine HUD Elements. Insert opens it.
 --
 -- Files, all in reframework/data/:
---   hud_element_hider.json              settings
---   hud_element_hider_list.json         the hide list
---   hud_element_hider_diagnostics.json  what the tool learned about the game
+--   hide_reengine_hud_elements.json              settings
+--   hide_reengine_hud_elements_list.json         the hide list
+--   hide_reengine_hud_elements_diagnostics.json  what the tool learned about the game
 --
--- Design and decisions: plans/001-hud-element-hider.md.
+-- Design and decisions: plans/001-hide-reengine-hud-elements.md.
 -- Verified REFramework API surface: docs/reframework-api.md.
 
-local MOD, VERSION = "HUD Element Hider", "0.6.0"
-local CFG_FILE  = "hud_element_hider.json"          -- settings
-local LIST_FILE = "hud_element_hider_list.json"     -- the hide list, shareable
-local DIAG_FILE = "hud_element_hider_diagnostics.json"
+local MOD, VERSION = "Hide RE Engine HUD Elements", "0.6.0"
+local CFG_FILE  = "hide_reengine_hud_elements.json"          -- settings
+local LIST_FILE = "hide_reengine_hud_elements_list.json"     -- the hide list, shareable
+local DIAG_FILE = "hide_reengine_hud_elements_diagnostics.json"
 local SCHEMA = 2
 
-local pure = require("hud_element_hider.pure")
-local diagnostics = require("hud_element_hider.diagnostics")
+local pure = require("hide_reengine_hud_elements.pure")
+local diagnostics = require("hide_reengine_hud_elements.diagnostics")
 
 -- ===========================================================================
 -- Engine-facing code. Everything below here needs REFramework.
@@ -738,7 +738,7 @@ end)
 -- json.load_file and json.dump_file already work in. Sharing one is therefore
 -- sending someone a file and them dropping it in beside their own.
 local LIST_SUFFIX = ".hudlist.json"
-local LIST_FORMAT = "hud-element-hider-list"
+local LIST_FORMAT = "hide-reengine-hud-elements-list"
 
 local function export_payload()
     local entries = {}

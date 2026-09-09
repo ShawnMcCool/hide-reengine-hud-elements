@@ -1,4 +1,4 @@
--- HUD Element Hider -- pure logic
+-- Hide RE Engine HUD Elements -- pure logic
 --
 -- Nothing in this file touches a REFramework global, so tests/test_pure.lua
 -- drives it directly on the desktop with no stubs at all. Key building, hide
