@@ -170,13 +170,31 @@ nothing special.
 ## Other games
 <a name="other-games"></a>
 
-Nothing here is specific to one game. The mod works on GUI element names and
-`via.gui` types, which every RE Engine game has, and it carries no game checks
-and no hardcoded names.
+**RE Engine only.** This is a [REFramework](https://github.com/praydog/REFramework)
+script, and REFramework is an RE Engine mod framework, so the mod runs wherever
+REFramework runs and nowhere else. Unity, Unreal and everything else are out of
+scope — there is no version of this for them.
 
-It has only been tested on **Onimusha: Way of the Sword**. Other REFramework
-titles will probably work. Element names differ per game, so hide lists do not
-transfer between them.
+Within RE Engine it should be portable. It works on GUI element names and
+`via.gui` types, which every RE Engine game has, and it carries no game checks
+and no hardcoded element names.
+
+It has only been tested on **Onimusha: Way of the Sword**. If you try it
+elsewhere, two things to know:
+
+- **Element ids do not transfer.** `GUI020102` is the Issen prompt here and
+  something else, or nothing, in another title. Hide lists are per-game.
+- **One optional dependency is game-specific.** The mod watches
+  `app.GameFlowManager` to notice when a level loads, so it can drop cached
+  element identities — addresses get reused, and a stale one could name the
+  wrong element. That type belongs to this game and will not exist in others.
+  When it is missing the probe switches itself off, says so in the panel under
+  Diagnostics, and the cache falls back to being rebuilt every five seconds
+  instead. Nothing breaks; it just refreshes on a timer rather than on the
+  event.
+
+If it does work somewhere else, the diagnostics section will tell you what it
+found, and that is the useful thing to include in a report.
 
 ## If something goes wrong
 

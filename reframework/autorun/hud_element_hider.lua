@@ -189,6 +189,18 @@ local stats = S.stats
 -- while the player is reading it.
 local LIVE_GRACE = 12
 
+-- The address cache is bounded in time as well as by load transitions. Element
+-- addresses are recycled when objects are freed, so a stale entry could name
+-- the wrong element and hide something a player never chose.
+--
+-- The transition signal cannot be relied on to do this alone. app.GameFlowManager
+-- is this game's own type and will not exist elsewhere, and via.SceneManager
+-- produced nothing across 111,000 polls even here -- so on another RE Engine
+-- title both probes may report nothing at all and the cache would otherwise
+-- never clear. Rebuilding it costs one reflection per element on screen, about
+-- 27 at worst, once every five seconds.
+local CACHE_TTL_FRAMES = 300
+
 -- Rows drawn at once. Long enough for every element this game showed in a
 -- session, short enough that a game with hundreds cannot fill the screen.
 local ROW_LIMIT = 40
@@ -210,10 +222,12 @@ local function add_event(text, colour)
     events[#events + 1] = { text = text, colour = colour, frame = frame }
 end
 
-local function clear_cache(why)
+local function clear_cache(why, quiet)
     local n = 0
     for k in pairs(classified) do classified[k] = nil; n = n + 1 end
-    if n > 0 then info("cache cleared (" .. why .. "), " .. n .. " entries") end
+    if n > 0 and not quiet then
+        info("cache cleared (" .. why .. "), " .. n .. " entries")
+    end
 end
 
 -- Diagnostics own the probes and the traces. The only thing they need back
@@ -677,6 +691,9 @@ end
 re.on_frame(function()
     frame = frame + 1
     sync_filter()
+    -- Quiet: this fires every five seconds and would otherwise fill the log,
+    -- which is the one artefact a bug report can carry.
+    if (frame % CACHE_TTL_FRAMES) == 0 then clear_cache("periodic", true) end
     pure.record_frame(stats, frame_elements)
     frame_elements = 0
     matched, pending = pending, {}

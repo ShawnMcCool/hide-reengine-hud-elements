@@ -601,6 +601,33 @@ eq("the replaced entry no longer hides",
     hot15(stub.element(0x2, "FROM_FILE", "via.gui.GUI", { "FROM_FILE" })), true)
 env15.restore()
 
+-- Element addresses are recycled, so the cache must be bounded in time and not
+-- only by load transitions. On a game without app.GameFlowManager -- which is
+-- every game but this one -- transitions may never fire at all.
+local env16, ok16, L16 = load_logger({})
+check("sixteenth instance loads", ok16, ok16 and "" or L16)
+local hot16 = env16.callbacks.on_pre_gui_draw_element
+local el = stub.element(0x7000, "RECYCLED", "via.gui.GUI", { "RECYCLED" })
+hot16(el)
+local misses_before = L16.state.stats.cache_misses
+for _ = 1, 60 do hot16(el) end
+eq("a cached address is not re-reflected",
+    L16.state.stats.cache_misses, misses_before)
+
+-- Run past the time bound with no transition of any kind.
+for _ = 1, 300 do env16.callbacks.on_frame() end
+hot16(el)
+check("the cache is rebuilt on the timer",
+    L16.state.stats.cache_misses > misses_before)
+
+-- And it stays quiet about it: the log is the only artefact a bug report has.
+local noisy = 0
+for _, line in ipairs(env16.logged) do
+    if tostring(line):find("cache cleared", 1, true) then noisy = noisy + 1 end
+end
+eq("periodic clearing does not fill the log", noisy, 0)
+env16.restore()
+
 -- ---------------------------------------------------------------------------
 group("finding")
 -- ---------------------------------------------------------------------------
