@@ -132,6 +132,24 @@ local function save_list()
     pcall(json.dump_file, LIST_FILE, list)
 end
 
+-- Hand-editing the file while the game runs is otherwise a trap: this list is
+-- held in memory and the next panel action writes all of it back, silently
+-- discarding whatever was typed into the file. Reload makes the file the
+-- authority again on demand.
+local function reload_list()
+    local ok, saved = pcall(json.load_file, LIST_FILE)
+    if not ok then
+        info("reload failed: could not read " .. LIST_FILE)
+        return false, "could not read the file"
+    end
+    local loaded = pure.clean_entries(saved)
+    for i = #list, 1, -1 do list[i] = nil end
+    for i = 1, #loaded do list[i] = loaded[i] end
+    refresh_hidden()
+    info("reloaded " .. #list .. " entries from " .. LIST_FILE)
+    return true, #list .. " entries loaded, " .. hidden_count .. " hidden"
+end
+
 local function sync_filter()
     if filter_raw ~= cfg.filter then
         filter_raw = cfg.filter
@@ -898,6 +916,11 @@ local function panel_body()
     imgui.same_line()
     if imgui.button("Add##manual") then
         if hide_add(add_buffer) then add_buffer = "" end
+    end
+    imgui.same_line()
+    if imgui.button("Reload from file") then
+        local ok, detail = reload_list()
+        share_message = ok and ("reloaded: " .. detail) or ("reload failed: " .. detail)
     end
     imgui.separator()
 

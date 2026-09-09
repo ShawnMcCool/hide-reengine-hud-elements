@@ -112,7 +112,8 @@ Then **write what it is in the label box** — "Press X to break Issen", say.
 else. The label is the only record of what you found.
 
 The tickbox beside each entry turns it off without deleting it, so you can put
-an element back without losing the identification work.
+an element back without losing the identification work. An entry left switched
+off is a note to yourself: recorded, labelled, still drawing.
 
 ### Watch what else disappears
 
@@ -156,9 +157,15 @@ All in the game's `reframework/data/`:
 | `hud_element_hider_diagnostics.json` | What the mod detected about the game |
 
 The hide list is deliberately separate from the settings so you can send it to
-someone without sending your overlay preferences too. It is plain json and safe
-to edit by hand; a bare name works as shorthand for an entry with no label, and
-an unusable line is dropped rather than taking the rest of the list with it.
+someone without sending your overlay preferences too. It is plain json: a bare
+name works as shorthand for an entry with no label, and an unusable line is
+dropped rather than taking the rest of the list with it.
+
+Editing it by hand while the game is running needs one extra step. The mod holds
+the list in memory and writes all of it back on the next panel action, which
+would discard your edit — so press **Reload from file** in the panel afterwards,
+and the file becomes the authority again. Editing with the game closed needs
+nothing special.
 
 ## Other games
 <a name="other-games"></a>

@@ -574,6 +574,33 @@ check("the panel renders without fs.glob", nofs, nofserr)
 check("and throws nothing", L10.state.panel_error == nil, L10.state.panel_error)
 env10.restore()
 
+-- Hand-editing the list file while the game runs is a trap without this: the
+-- in-memory copy is written back on the next panel action, discarding whatever
+-- was typed into the file.
+local env15, ok15, L15 = load_logger({ hide_list = {
+    { name = "FROM_FILE", label = "typed in by hand", on = true },
+} })
+check("fifteenth instance loads", ok15, ok15 and "" or L15)
+eq("started from the file", L15.list[1].name, "FROM_FILE")
+
+-- The file changes underneath the running mod.
+env15.opts.hide_list = {
+    { name = "EDITED", label = "added by hand while running", on = true },
+}
+env15.opts.click = "Reload from file"
+pcall(env15.callbacks.on_draw_ui)
+env15.opts.click = nil
+eq("reload replaces the list", #L15.list, 1)
+eq("with what the file now says", L15.list[1].name, "EDITED")
+eq("labels come back too", L15.list[1].label, "added by hand while running")
+
+local hot15 = env15.callbacks.on_pre_gui_draw_element
+eq("the reloaded entry hides",
+    hot15(stub.element(0x1, "EDITED", "via.gui.GUI", { "EDITED" })), false)
+eq("the replaced entry no longer hides",
+    hot15(stub.element(0x2, "FROM_FILE", "via.gui.GUI", { "FROM_FILE" })), true)
+env15.restore()
+
 -- ---------------------------------------------------------------------------
 group("finding")
 -- ---------------------------------------------------------------------------
