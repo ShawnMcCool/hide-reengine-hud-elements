@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# run-tests — desktop unit tests for the pure logic in the discovery logger.
+#
+# REFramework embeds Lua 5.4 and the system lua is 5.5, so 5.4 is named
+# explicitly. Engine behaviour is not covered here and never will be; it is
+# verified by playing the game against the session checklist.
+
+set -euo pipefail
+cd -- "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/.."
+exec lua5.4 tests/test_hud_element_hider.lua
