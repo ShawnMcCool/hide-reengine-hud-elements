@@ -952,16 +952,19 @@ local function panel_body()
     end
     tc("  " .. (VIEW_HELP[cfg.view] or ""), COL_LABEL)
 
+    -- One control per line. input_text takes the full width and puts its label
+    -- on the right, so anything placed after it with same_line is pushed off
+    -- the edge of the window and cannot be clicked.
     local schanged, sv = ui.input("search", cfg.search)
     if schanged then cfg.search = sv; save_cfg() end
-    ui.same_line()
+
     if ui.button("Reset##mark") then
         S.mark = frame
         cfg.view = "new"
         save_cfg()
     end
     ui.same_line()
-    tc("  Reset marks now, so 'new' shows only what appears next", COL_LABEL)
+    tc("  marks now: 'new' then shows only what appears next", COL_LABEL)
 
     local rows = rows_for(cfg.view, cfg.search)
     local shown = math.min(#rows, ROW_LIMIT)
@@ -991,29 +994,33 @@ local function panel_body()
             ui.same_line()
             tc("  " .. name, COL_VALUE)
         else
-            local changed_on, on = ui.checkbox("##on_" .. name, entry.on)
+            if ui.button("Del##row_" .. name) then delete_me = name end
+            ui.same_line()
+            local changed_on, on = ui.checkbox("hidden##on_" .. name, entry.on)
             if changed_on then entry.on = on; save_list() end
             ui.same_line()
             tc("  " .. name, entry.on and COL_NEW or COL_LABEL)
-            ui.same_line()
-            -- Always editable, never behind an Edit button: writing down what
-            -- an element is, right after flashing it, is the step that makes
-            -- the list worth anything to anyone else.
-            local changed_label, label = ui.input("##label_" .. name, entry.label)
-            if changed_label then entry.label = label; save_list() end
-            ui.same_line()
-            if ui.button("Del##row_" .. name) then delete_me = name end
             if entry.from ~= nil and entry.from ~= "" then
                 ui.same_line()
                 tc("  from " .. entry.from, COL_LABEL)
             end
+
+            -- The label gets its own line. A text field takes the full width
+            -- and puts its own caption on the right, so anything after it on
+            -- the same line is pushed past the edge of the window.
+            --
+            -- Always editable, never behind an Edit button: writing down what
+            -- an element is, right after flashing it, is the step that makes
+            -- the list worth anything to anyone else.
+            local changed_label, label = ui.input(
+                "what this is##label_" .. name, entry.label)
+            if changed_label then entry.label = label; save_list() end
         end
     end
     if delete_me ~= nil then hide_remove(delete_me) end
 
     local achanged, av = ui.input("hide a name directly", add_buffer)
     if achanged then add_buffer = av end
-    ui.same_line()
     if ui.button("Add##manual") then
         if hide_add(add_buffer) then add_buffer = "" end
     end
@@ -1022,6 +1029,8 @@ local function panel_body()
         local ok, detail = reload_list()
         share_message = ok and ("reloaded: " .. detail) or ("reload failed: " .. detail)
     end
+    ui.same_line()
+    tc("  re-reads the list after you edit it by hand", COL_LABEL)
     ui.separator()
 
     if ui.node("Share a list") then
@@ -1037,7 +1046,6 @@ local function panel_body()
 
         local echanged, ev = ui.input("export as", export_buffer)
         if echanged then export_buffer = ev end
-        ui.same_line()
         if ui.button("Save##export") then
             local ok, detail = export_list(export_buffer)
             share_message = ok and ("exported to " .. detail)
@@ -1059,7 +1067,6 @@ local function panel_body()
 
         local ichanged, iv = ui.input("or load by name", import_buffer)
         if ichanged then import_buffer = iv end
-        ui.same_line()
         if ui.button("Load##import") then
             local ok, detail = import_list(import_buffer)
             share_message = ok and detail or ("import failed: " .. detail)
@@ -1090,6 +1097,7 @@ local function panel_body()
         end
         local fchanged, fv = ui.input("filter (substring)", cfg.filter)
         if fchanged then set_filter(fv) end
+
         -- A filter matching nothing, or eleven things, should be visible before
         -- a mode is set to hide.
         if cfg.filter ~= "" then

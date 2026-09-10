@@ -645,6 +645,44 @@ eq("periodic clearing does not fill the log", noisy, 0)
 env16.restore()
 
 -- ---------------------------------------------------------------------------
+group("panel layout")
+-- ---------------------------------------------------------------------------
+-- A text field takes the full window width and puts its caption on the right,
+-- so anything placed after one with same_line is pushed past the edge of the
+-- window where it cannot be read or clicked. This is a source-shape rule
+-- rather than a behaviour, but it regresses silently: nothing throws, the
+-- control is simply gone.
+do
+    local src = assert(io.open("reframework/autorun/hide_reengine_hud_elements.lua"))
+    local lines = {}
+    for line in src:lines() do lines[#lines + 1] = line end
+    src:close()
+
+    local offenders = {}
+    for i, line in ipairs(lines) do
+        if line:find("ui.input(", 1, true) then
+            -- Skip the assignment's own follow-up lines, then see what comes next.
+            for j = i + 1, math.min(i + 3, #lines) do
+                local nxt = lines[j]
+                if nxt:find("ui.same_line()", 1, true) then
+                    offenders[#offenders + 1] = j
+                    break
+                end
+                local trimmed = nxt:match("^%s*(.-)%s*$")
+                if trimmed ~= "" and not trimmed:find("^if %w+changed")
+                    and not trimmed:find("^%-%-") then
+                    break
+                end
+            end
+        end
+    end
+    eq("no control is placed after a text field on the same line", #offenders, 0)
+    if #offenders > 0 then
+        io.write("    offending lines: " .. table.concat(offenders, ", ") .. "\n")
+    end
+end
+
+-- ---------------------------------------------------------------------------
 group("finding")
 -- ---------------------------------------------------------------------------
 -- The strongest finding aid the tool has: pause with the thing on screen, and
