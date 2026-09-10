@@ -745,6 +745,29 @@ for _, shape in ipairs({ "changed_and_value", "value" }) do
     end
 end
 
+-- A tickbox reporting a change to the value it already had must not count as a
+-- change: it would rewrite the list every frame and make a real toggle
+-- impossible to tell from a misread return value.
+local envN, okN, LN = load_logger({
+    ticked = true,   -- the stub reports "changed to true" every frame
+    hide_list = { { name = "ALREADY_ON", label = "on", on = true } },
+})
+check("tickbox instance loads", okN, okN and "" or LN)
+local function list_writes()
+    local n = 0
+    for _, d in ipairs(envN.dumps) do
+        if d.name == "hide_reengine_hud_elements_list.json" then n = n + 1 end
+    end
+    return n
+end
+local before_writes = list_writes()
+pcall(envN.callbacks.on_draw_ui)
+pcall(envN.callbacks.on_draw_ui)
+eq("a tickbox reporting its existing value writes nothing",
+    list_writes() - before_writes, 0)
+eq("and the entry is untouched", LN.list[1].on, true)
+envN.restore()
+
 -- ---------------------------------------------------------------------------
 group("panel layout")
 -- ---------------------------------------------------------------------------

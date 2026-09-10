@@ -1006,7 +1006,14 @@ local function panel_body()
         if ui.button("Del##list_" .. name) then delete_me = name end
         ui.same_line()
         local changed_on, on = ui.checkbox("hidden##on_" .. name, entry.on)
-        if changed_on then entry.on = on; save_list() end
+        if changed_on and on ~= entry.on then
+            -- Logged because the tickbox is the one control whose return shape
+            -- cannot be verified from outside the game: if an entry ever
+            -- changes state without being clicked, this line says when.
+            info("tickbox: " .. name .. " " .. (on and "on" or "off"))
+            entry.on = on
+            save_list()
+        end
         ui.same_line()
         tc("  " .. name, entry.on and COL_NEW or COL_LABEL)
         ui.same_line()
