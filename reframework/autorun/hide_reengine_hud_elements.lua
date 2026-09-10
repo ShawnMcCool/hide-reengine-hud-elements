@@ -539,16 +539,99 @@ local function select_element(name, mode)
     info("selected " .. name .. " in mode " .. mode)
 end
 
--- text_colored's argument order is unverified on this build. One failure
--- demotes every later call to plain text rather than breaking the panel.
-local colored_ok = true
-local function tc(s, colour)
-    if colored_ok then
-        if pcall(imgui.text_colored, s, colour) then return end
-        colored_ok = false
+-- Widgets, each degrading to something harmless when the binding is absent.
+--
+-- Three separate crashes came from calling an imgui function that does not
+-- exist on this build -- new_line, then radio_button, both of which appear in
+-- dinput8.dll as ImGui's own C symbols or demo text rather than as Lua
+-- bindings. A `strings` grep cannot tell those apart, and the inherited list
+-- of "confirmed" bindings turned out never to have been exercised either.
+--
+-- So the panel stops asserting. Every widget goes through here, availability is
+-- checked once against the engine, and a missing one substitutes something that
+-- still works rather than throwing halfway through drawing.
+local ui = {}
+local bound_cache = {}
+
+local function bound(name)
+    local known = bound_cache[name]
+    if known == nil then
+        known = type(imgui) == "table" and type(imgui[name]) == "function"
+        bound_cache[name] = known
     end
-    imgui.text(s)
+    return known
 end
+ui.bound = bound
+
+function ui.text(s)
+    if bound("text") then pcall(imgui.text, s) end
+end
+
+function ui.colored(s, colour)
+    if bound("text_colored") and pcall(imgui.text_colored, s, colour) then return end
+    ui.text(s)
+end
+
+function ui.same_line()
+    if bound("same_line") then pcall(imgui.same_line) end
+end
+
+function ui.separator()
+    if bound("separator") then pcall(imgui.separator) else ui.text("--------") end
+end
+
+function ui.button(label)
+    if bound("button") then
+        local ok, pressed = pcall(imgui.button, label)
+        if ok then return pressed == true end
+    end
+    ui.text("[" .. (label:gsub("##.*", "")) .. "]  (buttons unavailable)")
+    return false
+end
+
+-- Falls back to a button carrying its own state, which is what a checkbox is.
+function ui.checkbox(label, value)
+    if bound("checkbox") then
+        local ok, changed, v = pcall(imgui.checkbox, label, value)
+        if ok then return changed == true, v end
+    end
+    if ui.button((value and "[x] " or "[ ] ") .. label) then return true, not value end
+    return false, value
+end
+
+-- radio_button is absent on this build, so this is the path that actually runs.
+function ui.radio(label, active)
+    if bound("radio_button") then
+        local ok, pressed = pcall(imgui.radio_button, label, active)
+        if ok then return pressed == true end
+    end
+    return ui.button((active and "(*) " or "( ) ") .. label)
+end
+
+function ui.input(label, value)
+    if bound("input_text") then
+        local ok, changed, v = pcall(imgui.input_text, label, value)
+        if ok then return changed == true, v end
+    end
+    ui.text(label:gsub("##.*", "") .. ": " .. tostring(value)
+        .. "   (typing unavailable -- edit the file instead)")
+    return false, value
+end
+
+function ui.node(label)
+    if bound("tree_node") then
+        local ok, open = pcall(imgui.tree_node, label)
+        if ok then return open == true end
+    end
+    return false
+end
+
+function ui.node_end()
+    if bound("tree_pop") then pcall(imgui.tree_pop) end
+end
+
+-- Kept as the old short name so the panel body reads the same.
+local function tc(s, colour) ui.colored(s, colour) end
 
 -- ---------------------------------------------------------------------------
 -- Overlay
@@ -821,8 +904,8 @@ local import_buffer = ""
 local share_message = nil
 
 local function kv(label, value, colour)
-    imgui.text(label)
-    imgui.same_line()
+    ui.text(label)
+    ui.same_line()
     tc(value, colour or COL_VALUE)
 end
 
@@ -835,49 +918,49 @@ local function panel_body()
     -- The panel is the only way to change anything: the settings file is read at
     -- load and never re-read. So it has to explain itself. Someone using this
     -- to find an annoying prompt should not have to have written it.
-    if imgui.tree_node("How to use this") then
-        imgui.text("Insert opens and closes this menu.")
-        imgui.text("")
-        imgui.text("FINDING: pause with the thing you dislike on screen and")
-        imgui.text("look at the list below on the 'on screen' view. Only what")
-        imgui.text("is drawing right now is listed, so it is a short list.")
-        imgui.text("Not sure which row it is? Flash blinks it.")
-        imgui.text("")
-        imgui.text("Narrower still: press Reset, make the thing happen, then")
-        imgui.text("switch to the 'new' view. That is only what appeared since.")
-        imgui.text("")
-        imgui.text("HIDING: press Hide on the row. It stops drawing and stays")
-        imgui.text("gone across launches. The tickbox turns an entry off")
-        imgui.text("without deleting it.")
-        imgui.text("")
-        imgui.text("Then write what it is in the label box. The name is an")
-        imgui.text("opaque id, so the label is the only record of what you")
-        imgui.text("found, and it is what makes a list worth sending to")
-        imgui.text("someone else. See Share a list.")
-        imgui.tree_pop()
+    if ui.node("How to use this") then
+        ui.text("Insert opens and closes this menu.")
+        ui.text("")
+        ui.text("FINDING: pause with the thing you dislike on screen and")
+        ui.text("look at the list below on the 'on screen' view. Only what")
+        ui.text("is drawing right now is listed, so it is a short list.")
+        ui.text("Not sure which row it is? Flash blinks it.")
+        ui.text("")
+        ui.text("Narrower still: press Reset, make the thing happen, then")
+        ui.text("switch to the 'new' view. That is only what appeared since.")
+        ui.text("")
+        ui.text("HIDING: press Hide on the row. It stops drawing and stays")
+        ui.text("gone across launches. The tickbox turns an entry off")
+        ui.text("without deleting it.")
+        ui.text("")
+        ui.text("Then write what it is in the label box. The name is an")
+        ui.text("opaque id, so the label is the only record of what you")
+        ui.text("found, and it is what makes a list worth sending to")
+        ui.text("someone else. See Share a list.")
+        ui.node_end()
     end
-    imgui.separator()
+    ui.separator()
 
     -- One list. Whether an element is hidden is a property of its row, not a
     -- different screen: finding and hiding are the same surface.
     tc("ELEMENTS", COL_LABEL)
     for i, v in ipairs(VIEWS) do
-        if imgui.radio_button(v, cfg.view == v) then cfg.view = v; save_cfg() end
+        if ui.radio(v, cfg.view == v) then cfg.view = v; save_cfg() end
         -- No same_line after the last one, which is what breaks the row.
         -- imgui.new_line does not exist in this build.
-        if i < #VIEWS then imgui.same_line() end
+        if i < #VIEWS then ui.same_line() end
     end
     tc("  " .. (VIEW_HELP[cfg.view] or ""), COL_LABEL)
 
-    local schanged, sv = imgui.input_text("search", cfg.search)
+    local schanged, sv = ui.input("search", cfg.search)
     if schanged then cfg.search = sv; save_cfg() end
-    imgui.same_line()
-    if imgui.button("Reset##mark") then
+    ui.same_line()
+    if ui.button("Reset##mark") then
         S.mark = frame
         cfg.view = "new"
         save_cfg()
     end
-    imgui.same_line()
+    ui.same_line()
     tc("  Reset marks now, so 'new' shows only what appears next", COL_LABEL)
 
     local rows = rows_for(cfg.view, cfg.search)
@@ -899,93 +982,93 @@ local function panel_body()
         local entry = at and list[at] or nil
 
         tc(is_live(name) and "*" or " ", is_live(name) and COL_NEW or COL_LABEL)
-        imgui.same_line()
-        if imgui.button("Flash##row_" .. name) then select_element(name, "flash") end
-        imgui.same_line()
+        ui.same_line()
+        if ui.button("Flash##row_" .. name) then select_element(name, "flash") end
+        ui.same_line()
 
         if entry == nil then
-            if imgui.button("Hide##row_" .. name) then hide_add(name) end
-            imgui.same_line()
+            if ui.button("Hide##row_" .. name) then hide_add(name) end
+            ui.same_line()
             tc("  " .. name, COL_VALUE)
         else
-            local changed_on, on = imgui.checkbox("##on_" .. name, entry.on)
+            local changed_on, on = ui.checkbox("##on_" .. name, entry.on)
             if changed_on then entry.on = on; save_list() end
-            imgui.same_line()
+            ui.same_line()
             tc("  " .. name, entry.on and COL_NEW or COL_LABEL)
-            imgui.same_line()
+            ui.same_line()
             -- Always editable, never behind an Edit button: writing down what
             -- an element is, right after flashing it, is the step that makes
             -- the list worth anything to anyone else.
-            local changed_label, label = imgui.input_text("##label_" .. name, entry.label)
+            local changed_label, label = ui.input("##label_" .. name, entry.label)
             if changed_label then entry.label = label; save_list() end
-            imgui.same_line()
-            if imgui.button("Del##row_" .. name) then delete_me = name end
+            ui.same_line()
+            if ui.button("Del##row_" .. name) then delete_me = name end
             if entry.from ~= nil and entry.from ~= "" then
-                imgui.same_line()
+                ui.same_line()
                 tc("  from " .. entry.from, COL_LABEL)
             end
         end
     end
     if delete_me ~= nil then hide_remove(delete_me) end
 
-    local achanged, av = imgui.input_text("hide a name directly", add_buffer)
+    local achanged, av = ui.input("hide a name directly", add_buffer)
     if achanged then add_buffer = av end
-    imgui.same_line()
-    if imgui.button("Add##manual") then
+    ui.same_line()
+    if ui.button("Add##manual") then
         if hide_add(add_buffer) then add_buffer = "" end
     end
-    imgui.same_line()
-    if imgui.button("Reload from file") then
+    ui.same_line()
+    if ui.button("Reload from file") then
         local ok, detail = reload_list()
         share_message = ok and ("reloaded: " .. detail) or ("reload failed: " .. detail)
     end
-    imgui.separator()
+    ui.separator()
 
-    if imgui.tree_node("Share a list") then
+    if ui.node("Share a list") then
         -- Scanned when the section is first opened rather than behind a
         -- Refresh press: a file already sitting there should be offered
         -- without being asked for.
         if not share_files_loaded then refresh_share_files() end
-        imgui.text("Lists are json files in reframework/data/. Send someone")
-        imgui.text("the exported file; they drop it in there and load it.")
-        imgui.text("Imported entries arrive switched off, so someone else's")
-        imgui.text("list never changes your HUD until you tick it.")
-        imgui.text("")
+        ui.text("Lists are json files in reframework/data/. Send someone")
+        ui.text("the exported file; they drop it in there and load it.")
+        ui.text("Imported entries arrive switched off, so someone else's")
+        ui.text("list never changes your HUD until you tick it.")
+        ui.text("")
 
-        local echanged, ev = imgui.input_text("export as", export_buffer)
+        local echanged, ev = ui.input("export as", export_buffer)
         if echanged then export_buffer = ev end
-        imgui.same_line()
-        if imgui.button("Save##export") then
+        ui.same_line()
+        if ui.button("Save##export") then
             local ok, detail = export_list(export_buffer)
             share_message = ok and ("exported to " .. detail)
                 or ("export failed: " .. detail)
         end
 
-        if imgui.button("Refresh##files") then refresh_share_files() end
-        imgui.same_line()
+        if ui.button("Refresh##files") then refresh_share_files() end
+        ui.same_line()
         tc(share_files_error or (#share_files .. " json files in data/"), COL_LABEL)
         for _, f in ipairs(share_files) do
-            if imgui.button("Load##file_" .. f) then
+            if ui.button("Load##file_" .. f) then
                 local ok, detail = import_list(f)
                 share_message = ok and (f .. ": " .. detail)
                     or ("import failed: " .. detail)
             end
-            imgui.same_line()
+            ui.same_line()
             tc("  " .. f, COL_VALUE)
         end
 
-        local ichanged, iv = imgui.input_text("or load by name", import_buffer)
+        local ichanged, iv = ui.input("or load by name", import_buffer)
         if ichanged then import_buffer = iv end
-        imgui.same_line()
-        if imgui.button("Load##import") then
+        ui.same_line()
+        if ui.button("Load##import") then
             local ok, detail = import_list(import_buffer)
             share_message = ok and detail or ("import failed: " .. detail)
         end
 
         if share_message ~= nil then tc(share_message, COL_VALUE) end
-        imgui.tree_pop()
+        ui.node_end()
     end
-    imgui.separator()
+    ui.separator()
 
     -- Flash is temporary state, separate from the list. Saying so avoids the
     -- trap of flashing something, seeing it blink, and assuming it is dealt
@@ -993,19 +1076,19 @@ local function panel_body()
     if cfg.mode ~= "observe" and cfg.filter ~= "" then
         tc("TEMPORARY: " .. cfg.mode .. " on " .. cfg.filter
            .. "  (not on the hide list)", COL_VALUE)
-        imgui.same_line()
-        if imgui.button("Stop") then select_element("", "observe") end
-        imgui.separator()
+        ui.same_line()
+        if ui.button("Stop") then select_element("", "observe") end
+        ui.separator()
     end
 
 
-    if imgui.tree_node("Manual control") then
+    if ui.node("Manual control") then
         for _, m in ipairs(MODES) do
-            if imgui.radio_button(m, cfg.mode == m) then cfg.mode = m; save_cfg() end
-            imgui.same_line()
+            if ui.radio(m, cfg.mode == m) then cfg.mode = m; save_cfg() end
+            ui.same_line()
             tc("  " .. MODE_HELP[m], COL_LABEL)
         end
-        local fchanged, fv = imgui.input_text("filter (substring)", cfg.filter)
+        local fchanged, fv = ui.input("filter (substring)", cfg.filter)
         if fchanged then set_filter(fv) end
         -- A filter matching nothing, or eleven things, should be visible before
         -- a mode is set to hide.
@@ -1018,9 +1101,9 @@ local function panel_body()
             tc("  matches " .. #hits .. ": " .. table.concat(hits, ", "),
                #hits == 0 and COL_ALERT or COL_VALUE)
         end
-        imgui.tree_pop()
+        ui.node_end()
     end
-    imgui.separator()
+    ui.separator()
 
     tc("FINDINGS", COL_LABEL)
     kv("Elements/frame", string.format("%d   min %d   max %d   avg %d",
@@ -1037,7 +1120,7 @@ local function panel_body()
     else
         tc("Collisions: " .. #collisions .. " name(s) carry more than one type", COL_ALERT)
         for _, c in ipairs(collisions) do
-            imgui.text("  " .. c.name .. "  ->  " .. table.concat(c.types, ", "))
+            ui.text("  " .. c.name .. "  ->  " .. table.concat(c.types, ", "))
         end
     end
 
@@ -1047,7 +1130,7 @@ local function panel_body()
     else
         tc("Probes disabled: " .. table.concat(disabled, ", "), COL_ALERT)
         for _, name in ipairs(disabled) do
-            imgui.text("  " .. name .. ": " .. tostring(probes[name].reason))
+            ui.text("  " .. name .. ": " .. tostring(probes[name].reason))
         end
     end
     kv("Scene / flow changes", #diag.scene_trace .. " / " .. #diag.flow_trace)
@@ -1055,31 +1138,31 @@ local function panel_body()
         or (hidden_count .. " hidden of " .. #list .. " listed"),
         #list == 0 and COL_LABEL or COL_NEW)
 
-    if imgui.tree_node("Details") then
-        imgui.text("package.path = " .. tostring(diag.findings.package_path))
-        imgui.text("display = " .. tostring(diag.findings.display_size)
+    if ui.node("Details") then
+        ui.text("package.path = " .. tostring(diag.findings.package_path))
+        ui.text("display = " .. tostring(diag.findings.display_size)
             .. " via " .. tostring(diag.findings.display_size_namespace))
-        imgui.text("via.Application methods = "
+        ui.text("via.Application methods = "
             .. tostring(diag.findings.application_methods and #diag.findings.application_methods or "?"))
-        imgui.text("output = reframework/data/" .. DIAG_FILE)
-        imgui.tree_pop()
+        ui.text("output = reframework/data/" .. DIAG_FILE)
+        ui.node_end()
     end
-    imgui.separator()
+    ui.separator()
 
     tc("DISPLAY", COL_LABEL)
-    local changed, v = imgui.checkbox("On-screen overlay", cfg.overlay)
+    local changed, v = ui.checkbox("On-screen overlay", cfg.overlay)
     if changed then cfg.overlay = v; save_cfg() end
-    changed, v = imgui.checkbox("Announce new elements", cfg.announce)
+    changed, v = ui.checkbox("Announce new elements", cfg.announce)
     if changed then cfg.announce = v; save_cfg() end
     for _, style in ipairs(OVERLAY_STYLES) do
-        if imgui.radio_button("overlay: " .. style, cfg.overlay_style == style) then
+        if ui.radio("overlay: " .. style, cfg.overlay_style == style) then
             cfg.overlay_style = style; save_cfg()
         end
-        imgui.same_line()
+        ui.same_line()
         tc(style == "draw" and "  fixed size, small at 4K, always works"
                             or "  uses the REFramework font size, unproven here", COL_LABEL)
     end
-    if imgui.button("Dump now") then dump("manual") end
+    if ui.button("Dump now") then dump("manual") end
 end
 
 re.on_draw_ui(function()
@@ -1090,7 +1173,7 @@ re.on_draw_ui(function()
     -- The label must not vary. ImGui identifies a tree node by its text, so
     -- folding the mode into it gives the node a new identity whenever the
     -- mode changes, collapsing the panel the instant Flash is pressed.
-    if not imgui.tree_node(MOD) then return end
+    if not ui.node(MOD) then return end
 
     -- Recorded on the state rather than swallowed, so the tests can assert
     -- a normal render produces no error. Without that, this guard would
@@ -1103,10 +1186,10 @@ re.on_draw_ui(function()
             S.panel_error = tostring(err)
             info("panel error: " .. S.panel_error)
         end
-        pcall(imgui.text, "panel error: " .. tostring(S.panel_error))
-        pcall(imgui.text, "Hiding still works. Please report this.")
+        ui.text("panel error: " .. tostring(S.panel_error))
+        ui.text("Hiding still works. Please report this.")
     end
-    imgui.tree_pop()
+    ui.node_end()
 end)
 
 -- ---------------------------------------------------------------------------

@@ -64,10 +64,7 @@ function M.install(opts)
             if opts.no_text_colored then error("text_colored unsupported") end
         end,
         checkbox = function(_, v) return false, v end,
-        radio_button = function()
-            if opts.break_panel then error("simulated missing binding") end
-            return false
-        end,
+        radio_button = function() return false end,
         input_text = function(_, v) return false, v end,
         -- opts.click names a button label to report as clicked this frame.
         button = function(label) return opts.click ~= nil and label == opts.click end,
@@ -83,6 +80,12 @@ function M.install(opts)
         end,
         end_window = noop,
     }
+
+    -- opts.remove models this build's reality: bindings that are simply not
+    -- there. radio_button and new_line are both absent in REFramework 01417.
+    for _, name in ipairs(opts.remove or {}) do
+        _G.imgui[name] = nil
+    end
 
     _G.Vector2f = { new = function(x, y) return { x = x, y = y } end }
 

@@ -334,21 +334,37 @@ eq("the mode changed", L5.cfg.mode, "flash")
 eq("the panel's label does not change with it", env5.tree_labels[1], label_before)
 env5.restore()
 
--- An exception inside the panel must still reach tree_pop. Leaving Dear ImGui's
--- stack unbalanced breaks REFramework's entire window, not just this panel --
--- which is what a missing imgui.new_line did in game.
-local env13, ok13, L13 = load_logger({ break_panel = true })
+-- Three separate crashes came from calling an imgui function this build does
+-- not bind. The panel must now render fully with any one of them missing,
+-- because a `strings` grep cannot tell a Lua binding from ImGui's own C symbol
+-- and the inherited list of "confirmed" bindings was never exercised.
+for _, missing in ipairs({ "radio_button", "checkbox", "button", "input_text",
+                           "text_colored", "same_line", "separator", "text",
+                           "tree_node", "tree_pop" }) do
+    local envX, okX, LX = load_logger({ remove = { missing } })
+    check("loads without imgui." .. missing, okX, okX and "" or LX)
+    if okX then
+        local hotX = envX.callbacks.on_pre_gui_draw_element
+        hotX(stub.element(0x1, "GUI020102", "via.gui.GUI", { "GUI020102" }))
+        local drewX, errX = pcall(envX.callbacks.on_draw_ui)
+        check("panel survives a missing imgui." .. missing, drewX, errX)
+        check("and reports no error without imgui." .. missing,
+            LX.state.panel_error == nil, LX.state.panel_error)
+        -- Hiding is the product. It must not depend on the interface at all.
+        eq("hiding still works without imgui." .. missing,
+            hotX(stub.element(0x2, "OTHER", "via.gui.GUI", { "OTHER" })), true)
+        envX.restore()
+    end
+end
+
+-- tree_pop is still called unconditionally, which is what keeps a logic error
+-- inside the panel from unbalancing Dear ImGui and taking out REFramework's
+-- whole window rather than just this panel.
+local env13, ok13, L13 = load_logger({})
 check("thirteenth instance loads", ok13, ok13 and "" or L13)
 env13.tree_pops = 0
-local survived, perr13 = pcall(env13.callbacks.on_draw_ui)
-check("a broken panel does not propagate", survived, perr13)
-check("tree_pop still ran", env13.tree_pops > 0)
-check("the error is recorded, not swallowed", L13.state.panel_error ~= nil)
--- Hiding must keep working while the panel is broken: it is the product, and
--- the panel is how you change it, not how it runs.
-local hot13 = env13.callbacks.on_pre_gui_draw_element
-eq("the draw callback is unaffected",
-    hot13(stub.element(0x1, "ANY", "via.gui.GUI", { "ANY" })), true)
+pcall(env13.callbacks.on_draw_ui)
+check("tree_pop ran", env13.tree_pops > 0)
 env13.restore()
 
 -- Every imgui binding the panel calls must exist. The strings grep that said
