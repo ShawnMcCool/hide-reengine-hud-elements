@@ -581,7 +581,7 @@ if exported ~= nil then
     eq("export carries labels", exported.entries[2].label, "someone else's find")
 end
 
-env9.opts.click = "Del##row_GUI020102"
+env9.opts.click = "Del##list_GUI020102"
 pcall(env9.callbacks.on_draw_ui)
 eq("Del removes the entry", pure.entry_index(L9.list, "GUI020102"), nil)
 eq("removed element draws again",
@@ -651,6 +651,41 @@ for _, line in ipairs(env16.logged) do
 end
 eq("periodic clearing does not fill the log", noisy, 0)
 env16.restore()
+
+-- ---------------------------------------------------------------------------
+group("the hide list is always visible")
+-- ---------------------------------------------------------------------------
+-- The list is what the tool produces. Showing it only through a view of the
+-- element browser meant a player could not see their own list unless its
+-- entries happened to be drawing at that moment -- which, for a prompt that
+-- appears occasionally, is almost never.
+local envL, okL, LL = load_logger({ hide_list = {
+    { name = "NOT_DRAWING", label = "an occasional prompt", on = true },
+} })
+check("list instance loads", okL, okL and "" or LL)
+eq("the browser is on the on-screen view", LL.cfg.view, "on screen")
+eq("and nothing is drawing", #LL.rows_for("on screen", ""), 0)
+
+-- The entry's own controls must still have been rendered, which a click proves.
+envL.opts.click = "Del##list_NOT_DRAWING"
+pcall(envL.callbacks.on_draw_ui)
+envL.opts.click = nil
+eq("the entry was on screen to be deleted", #LL.list, 0)
+
+-- And the same for an entry that is drawing, so the list does not depend on
+-- liveness in either direction.
+local envM, okM, LM = load_logger({ hide_list = {
+    { name = "DRAWING", label = "always up", on = true },
+} })
+check("second list instance loads", okM, okM and "" or LM)
+local hotM = envM.callbacks.on_pre_gui_draw_element
+hotM(stub.element(0x1, "DRAWING", "via.gui.GUI", { "DRAWING" }))
+envM.opts.click = "Del##list_DRAWING"
+pcall(envM.callbacks.on_draw_ui)
+envM.opts.click = nil
+eq("a drawing entry is deletable too", #LM.list, 0)
+envL.restore()
+envM.restore()
 
 -- ---------------------------------------------------------------------------
 group("widget return shapes")
@@ -799,11 +834,13 @@ local env12, ok12, L12 = load_logger({ hide_list = {
     { name = "NEVER_SEEN_HERE", label = "someone else's find", on = false },
 } })
 check("twelfth instance loads", ok12, ok12 and "" or L12)
-local hidden_view = L12.rows_for("hidden", "")
-eq("the hidden view includes an entry never seen", #hidden_view, 1)
-eq("and names it", hidden_view[1].name, "NEVER_SEEN_HERE")
+-- The hide list is always rendered, so an entry that has never drawn here is
+-- visible without switching views at all. The browser's "everything" still
+-- includes it, so it can also be found by search.
+eq("the entry is on the list", L12.list[1].name, "NEVER_SEEN_HERE")
+eq("everything includes an entry never seen", #L12.rows_for("everything", ""), 1)
+eq("and names it", L12.rows_for("everything", "")[1].name, "NEVER_SEEN_HERE")
 eq("it is absent from on screen", #L12.rows_for("on screen", ""), 0)
-eq("everything includes it too", #L12.rows_for("everything", ""), 1)
 
 -- A listed element that has also been seen must appear once, not twice.
 local hot12 = env12.callbacks.on_pre_gui_draw_element

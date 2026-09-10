@@ -459,12 +459,11 @@ end
 -- One list, four ways of looking at it. Finding and hiding are the same
 -- surface: whether an element is hidden is a property of a row, not a
 -- different screen.
-local VIEWS = { "on screen", "new", "everything", "hidden" }
+local VIEWS = { "on screen", "new", "everything" }
 local VIEW_HELP = {
     ["on screen"] = "drawing right now -- pause with it visible and it is here",
     ["new"]       = "first seen since you pressed Reset",
     ["everything"] = "every element seen this session, newest first",
-    ["hidden"]    = "your hide list, including entries not seen yet",
 }
 
 -- Rows are the union of what has been seen and what is on the hide list: an
@@ -479,7 +478,7 @@ local function rows_for(view, search)
         return true
     end
 
-    if view ~= "hidden" then
+    do
         for i = #S.order, 1, -1 do
             local rec = S.seen[S.order[i]]
             if rec ~= nil and want(rec.name) then
@@ -494,10 +493,14 @@ local function rows_for(view, search)
         end
     end
 
-    for _, e in ipairs(list) do
-        if want(e.name) and (view == "hidden" or view == "everything") then
-            taken[e.name] = true
-            out[#out + 1] = { name = e.name, first_frame = nil }
+    -- Listed entries that have never drawn here still belong in "everything",
+    -- so an imported entry is reachable before it is ever seen.
+    if view == "everything" then
+        for _, e in ipairs(list) do
+            if want(e.name) then
+                taken[e.name] = true
+                out[#out + 1] = { name = e.name, first_frame = nil }
+            end
         end
     end
     return out
@@ -985,79 +988,41 @@ local function panel_body()
 
     -- One list. Whether an element is hidden is a property of its row, not a
     -- different screen: finding and hiding are the same surface.
-    tc("ELEMENTS", COL_LABEL)
-    for i, v in ipairs(VIEWS) do
-        if ui.radio(v, cfg.view == v) then cfg.view = v; save_cfg() end
-        -- No same_line after the last one, which is what breaks the row.
-        -- imgui.new_line does not exist in this build.
-        if i < #VIEWS then ui.same_line() end
-    end
-    tc("  " .. (VIEW_HELP[cfg.view] or ""), COL_LABEL)
-
-    -- One control per line. input_text takes the full width and puts its label
-    -- on the right, so anything placed after it with same_line is pushed off
-    -- the edge of the window and cannot be clicked.
-    local schanged, sv = ui.input("search", cfg.search)
-    if schanged then cfg.search = sv; save_cfg() end
-
-    if ui.button("Reset##mark") then
-        S.mark = frame
-        cfg.view = "new"
-        save_cfg()
-    end
-    ui.same_line()
-    tc("  marks now: 'new' then shows only what appears next", COL_LABEL)
-
-    local rows = rows_for(cfg.view, cfg.search)
-    local shown = math.min(#rows, ROW_LIMIT)
-    tc(string.format("  %d shown%s   --   %d hidden of %d listed",
-        shown, #rows > shown and (" of " .. #rows) or "",
-        hidden_count, #list), COL_LABEL)
-    if #rows == 0 then
-        tc(cfg.view == "on screen"
-            and "  nothing drawing right now"
-            or "  nothing matches", COL_LABEL)
+    -- The hide list is always on screen. It is what the tool produces, and
+    -- burying it behind a view of the element browser meant a player could not
+    -- see their own list unless the elements in it happened to be drawing at
+    -- that moment. The browser below is a live observation; this is saved state.
+    tc(string.format("HIDE LIST  --  %d hidden of %d", hidden_count, #list),
+       COL_LABEL)
+    if #list == 0 then
+        tc("  empty. Find something below and press Hide.", COL_LABEL)
     end
 
     local delete_me = nil
-    for i = 1, shown do
-        local row = rows[i]
-        local name = row.name
-        local at = pure.entry_index(list, name)
-        local entry = at and list[at] or nil
-
-        tc(is_live(name) and "*" or " ", is_live(name) and COL_NEW or COL_LABEL)
+    for _, entry in ipairs(list) do
+        local name = entry.name
+        if ui.button("Flash##list_" .. name) then select_element(name, "flash") end
         ui.same_line()
-        if ui.button("Flash##row_" .. name) then select_element(name, "flash") end
+        if ui.button("Del##list_" .. name) then delete_me = name end
         ui.same_line()
-
-        if entry == nil then
-            if ui.button("Hide##row_" .. name) then hide_add(name) end
+        local changed_on, on = ui.checkbox("hidden##on_" .. name, entry.on)
+        if changed_on then entry.on = on; save_list() end
+        ui.same_line()
+        tc("  " .. name, entry.on and COL_NEW or COL_LABEL)
+        ui.same_line()
+        tc(is_live(name) and "  (on screen)" or "  (not drawing)", COL_LABEL)
+        if entry.from ~= nil and entry.from ~= "" then
             ui.same_line()
-            tc("  " .. name, COL_VALUE)
-        else
-            if ui.button("Del##row_" .. name) then delete_me = name end
-            ui.same_line()
-            local changed_on, on = ui.checkbox("hidden##on_" .. name, entry.on)
-            if changed_on then entry.on = on; save_list() end
-            ui.same_line()
-            tc("  " .. name, entry.on and COL_NEW or COL_LABEL)
-            if entry.from ~= nil and entry.from ~= "" then
-                ui.same_line()
-                tc("  from " .. entry.from, COL_LABEL)
-            end
-
-            -- The label gets its own line. A text field takes the full width
-            -- and puts its own caption on the right, so anything after it on
-            -- the same line is pushed past the edge of the window.
-            --
-            -- Always editable, never behind an Edit button: writing down what
-            -- an element is, right after flashing it, is the step that makes
-            -- the list worth anything to anyone else.
-            local changed_label, label = ui.input(
-                "what this is##label_" .. name, entry.label)
-            if changed_label then entry.label = label; save_list() end
+            tc("  from " .. entry.from, COL_LABEL)
         end
+
+        -- Always editable, never behind an Edit button: writing down what an
+        -- element is, right after flashing it, is the step that makes the list
+        -- worth anything to anyone else. Its own line, because a text field
+        -- takes the full width.
+        local changed_label, label = ui.input(
+            "what this is##label_" .. name, entry.label)
+        if changed_label then entry.label = label; save_list() end
     end
     if delete_me ~= nil then hide_remove(delete_me) end
 
@@ -1074,6 +1039,54 @@ local function panel_body()
     ui.same_line()
     tc("  re-reads the list after you edit it by hand", COL_LABEL)
     ui.separator()
+
+    -- The browser: what the game is drawing, so you can find the thing you
+    -- want on the list above.
+    tc("FIND AN ELEMENT", COL_LABEL)
+    for i, v in ipairs(VIEWS) do
+        if ui.radio(v, cfg.view == v) then cfg.view = v; save_cfg() end
+        if i < #VIEWS then ui.same_line() end
+    end
+    tc("  " .. (VIEW_HELP[cfg.view] or ""), COL_LABEL)
+
+    local schanged, sv = ui.input("search", cfg.search)
+    if schanged then cfg.search = sv; save_cfg() end
+
+    if ui.button("Reset##mark") then
+        S.mark = frame
+        cfg.view = "new"
+        save_cfg()
+    end
+    ui.same_line()
+    tc("  marks now: 'new' then shows only what appears next", COL_LABEL)
+
+    local rows = rows_for(cfg.view, cfg.search)
+    local shown = math.min(#rows, ROW_LIMIT)
+    tc(string.format("  %d shown%s", shown,
+        #rows > shown and (" of " .. #rows) or ""), COL_LABEL)
+    if #rows == 0 then
+        tc(cfg.view == "on screen"
+            and "  nothing drawing right now"
+            or "  nothing matches", COL_LABEL)
+    end
+
+    for i = 1, shown do
+        local name = rows[i].name
+        local listed = pure.entry_index(list, name) ~= nil
+        tc(is_live(name) and "*" or " ", is_live(name) and COL_NEW or COL_LABEL)
+        ui.same_line()
+        if ui.button("Flash##row_" .. name) then select_element(name, "flash") end
+        ui.same_line()
+        if listed then
+            tc("  " .. name .. "   already on the list above", COL_NEW)
+        else
+            if ui.button("Hide##row_" .. name) then hide_add(name) end
+            ui.same_line()
+            tc("  " .. name, COL_VALUE)
+        end
+    end
+    ui.separator()
+
 
     if ui.node("Share a list") then
         -- Scanned when the section is first opened rather than behind a
