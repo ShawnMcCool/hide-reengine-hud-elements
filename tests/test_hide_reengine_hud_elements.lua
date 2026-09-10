@@ -528,6 +528,9 @@ group("panel list actions")
 local env9, ok9, L9 = load_logger({ files = {
     ["friend.hudlist.json"] = { format = "hide-reengine-hud-elements-list", version = 1,
         entries = { { name = "GUI099999", label = "someone else's find", on = true } } },
+    -- Another mod's settings. reframework/data/ is shared, so this is the
+    -- normal case, and offering it as a loadable list would only confuse.
+    ["instant_boot.json"] = { enabled = true, hide_boot_gui = true },
 } })
 check("ninth instance loads", ok9, ok9 and "" or L9)
 local hot9 = env9.callbacks.on_pre_gui_draw_element
@@ -550,6 +553,11 @@ check("the list is written to its own file",
 env9.opts.click = "Load##file_friend.hudlist.json"
 pcall(env9.callbacks.on_draw_ui)
 eq("the shared entry was added", #L9.list, 2)
+
+env9.opts.click = "Load##file_instant_boot.json"
+pcall(env9.callbacks.on_draw_ui)
+eq("another mod's config is never offered as a list", #L9.list, 2)
+env9.opts.click = nil
 eq("the shared entry is switched off", L9.list[2].on, false)
 eq("the shared entry kept its label", L9.list[2].label, "someone else's find")
 eq("the shared element still draws",
@@ -643,6 +651,64 @@ for _, line in ipairs(env16.logged) do
 end
 eq("periodic clearing does not fill the log", noisy, 0)
 env16.restore()
+
+-- ---------------------------------------------------------------------------
+group("widget return shapes")
+-- ---------------------------------------------------------------------------
+-- The return shape of input_text and checkbox is undocumented and differs
+-- between REFramework builds. Assuming one shape silently breaks the other:
+-- the change is never detected, the value is never written back, and the
+-- control behaves exactly like a dead field that will not accept typing.
+for _, shape in ipairs({ "changed_and_value", "value" }) do
+    local envT, okT, LT = load_logger({ input_shape = shape, typed = "GUI0201" })
+    check("loads with input shape " .. shape, okT, okT and "" or LT)
+    if okT then
+        pcall(envT.callbacks.on_draw_ui)
+        eq("typing reaches the search box with shape " .. shape,
+            LT.cfg.search, "GUI0201")
+        envT.restore()
+    end
+end
+
+-- Untouched fields must not report a change, or every frame would look like an
+-- edit and the config would be rewritten sixty times a second.
+for _, shape in ipairs({ "changed_and_value", "value" }) do
+    local envU, okU, LU = load_logger({ input_shape = shape })
+    check("loads with untouched input, shape " .. shape, okU, okU and "" or LU)
+    if okU then
+        -- Counted from after load: a first run with no settings file writes
+        -- the defaults once, which is not a panel save.
+        local function writes()
+            local n = 0
+            for _, d in ipairs(envU.dumps) do
+                if d.name == "hide_reengine_hud_elements.json" then n = n + 1 end
+            end
+            return n
+        end
+        local before = writes()
+        pcall(envU.callbacks.on_draw_ui)
+        eq("an untouched panel saves nothing, shape " .. shape, writes() - before, 0)
+        envU.restore()
+    end
+end
+
+-- Same for the tickbox that switches an entry on and off.
+for _, shape in ipairs({ "changed_and_value", "value" }) do
+    local envV, okV, LV = load_logger({
+        checkbox_shape = shape, ticked = false,
+        hide_list = { { name = "TICKED", label = "on", on = true } },
+    })
+    check("loads with checkbox shape " .. shape, okV, okV and "" or LV)
+    if okV then
+        local hotV = envV.callbacks.on_pre_gui_draw_element
+        hotV(stub.element(0x1, "TICKED", "via.gui.GUI", { "TICKED" }))
+        pcall(envV.callbacks.on_draw_ui)
+        eq("unticking reaches the entry with shape " .. shape, LV.list[1].on, false)
+        eq("and it draws again with shape " .. shape,
+            hotV(stub.element(0x1, "TICKED", "via.gui.GUI", { "TICKED" })), true)
+        envV.restore()
+    end
+end
 
 -- ---------------------------------------------------------------------------
 group("panel layout")

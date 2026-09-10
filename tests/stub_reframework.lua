@@ -63,9 +63,24 @@ function M.install(opts)
         text_colored = function(...)
             if opts.no_text_colored then error("text_colored unsupported") end
         end,
-        checkbox = function(_, v) return false, v end,
+        checkbox = function(_, v)
+            local ticked = opts.ticked
+            if opts.checkbox_shape == "value" then
+                if ticked ~= nil then return ticked end
+                return v
+            end
+            if ticked ~= nil then return true, ticked end
+            return false, v
+        end,
         radio_button = function() return false end,
-        input_text = function(_, v) return false, v end,
+        -- REFramework builds differ here and the shape is undocumented:
+        -- opts.input_shape picks which one this stub imitates.
+        input_text = function(_, v)
+            local typed = opts.typed
+            if opts.input_shape == "value" then return typed or v end
+            if typed ~= nil then return true, typed end
+            return false, v
+        end,
         -- opts.click names a button label to report as clicked this frame.
         button = function(label) return opts.click ~= nil and label == opts.click end,
         -- Deliberately no new_line: this build of REFramework does not bind

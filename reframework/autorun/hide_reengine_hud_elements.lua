@@ -590,10 +590,19 @@ function ui.button(label)
 end
 
 -- Falls back to a button carrying its own state, which is what a checkbox is.
+-- Same undocumented return shape problem as the text field.
 function ui.checkbox(label, value)
     if bound("checkbox") then
-        local ok, changed, v = pcall(imgui.checkbox, label, value)
-        if ok then return changed == true, v end
+        local ok, a, b = pcall(imgui.checkbox, label, value)
+        if ok then
+            if type(a) == "boolean" and type(b) == "boolean" then
+                return a, b
+            elseif type(a) == "boolean" then
+                -- The binding returned the new state alone.
+                return a ~= value, a
+            end
+            return false, value
+        end
     end
     if ui.button((value and "[x] " or "[ ] ") .. label) then return true, not value end
     return false, value
@@ -608,12 +617,36 @@ function ui.radio(label, active)
     return ui.button((active and "(*) " or "( ) ") .. label)
 end
 
+-- Text fields put their caption to the RIGHT of the field, which reads as a
+-- stray heading and pushes the field's width around. The caption goes on its
+-- own line above instead and the field itself is given a hidden one.
+--
+-- The return shape is not documented and differs between REFramework builds:
+-- some return (changed, value), some return the value alone. Assuming the
+-- first shape silently breaks the second -- `changed` is never true, the value
+-- is never written back, and the field behaves exactly like a dead control
+-- that will not accept typing. Both shapes are handled.
 function ui.input(label, value)
+    local caption, id = label:match("^(.-)##(.*)$")
+    caption = caption or label
+    id = id or label
+    if caption ~= "" then ui.colored(caption, COL_LABEL) end
+
     if bound("input_text") then
-        local ok, changed, v = pcall(imgui.input_text, label, value)
-        if ok then return changed == true, v end
+        local ok, a, b = pcall(imgui.input_text, "##" .. id, value)
+        if ok then
+            if type(a) == "boolean" then
+                local v = type(b) == "string" and b or value
+                return a, v
+            elseif type(a) == "string" then
+                return a ~= value, a
+            elseif type(b) == "string" then
+                return b ~= value, b
+            end
+            return false, value
+        end
     end
-    ui.text(label:gsub("##.*", "") .. ": " .. tostring(value)
+    ui.text("  " .. tostring(value)
         .. "   (typing unavailable -- edit the file instead)")
     return false, value
 end
@@ -884,13 +917,22 @@ local function refresh_share_files()
         share_files_error = "fs.glob failed -- type a filename"
         return
     end
+    -- reframework/data/ holds every mod's settings. Offering all of them as
+    -- loadable lists invites a player to import another mod's config and
+    -- wonder why nothing happened, so a file is only offered if it actually
+    -- reads as a list of entries.
     for _, f in ipairs(found) do
         local base = tostring(f):match("([^/\\]+)$") or tostring(f)
         if base ~= CFG_FILE and base ~= DIAG_FILE and base ~= LIST_FILE then
-            share_files[#share_files + 1] = base
+            local ok, payload = pcall(json.load_file, base)
+            local entries = ok and payload_entries(payload) or nil
+            if entries ~= nil and #entries > 0 then
+                share_files[#share_files + 1] =
+                    { name = base, count = #entries }
+            end
         end
     end
-    table.sort(share_files)
+    table.sort(share_files, function(a, b) return a.name < b.name end)
 end
 
 -- ---------------------------------------------------------------------------
@@ -1054,15 +1096,15 @@ local function panel_body()
 
         if ui.button("Refresh##files") then refresh_share_files() end
         ui.same_line()
-        tc(share_files_error or (#share_files .. " json files in data/"), COL_LABEL)
+        tc(share_files_error or (#share_files .. " list(s) found in data/"), COL_LABEL)
         for _, f in ipairs(share_files) do
-            if ui.button("Load##file_" .. f) then
-                local ok, detail = import_list(f)
-                share_message = ok and (f .. ": " .. detail)
+            if ui.button("Load##file_" .. f.name) then
+                local ok, detail = import_list(f.name)
+                share_message = ok and (f.name .. ": " .. detail)
                     or ("import failed: " .. detail)
             end
             ui.same_line()
-            tc("  " .. f, COL_VALUE)
+            tc("  " .. f.name .. "   (" .. f.count .. " entries)", COL_VALUE)
         end
 
         local ichanged, iv = ui.input("or load by name", import_buffer)
