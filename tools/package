@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# package — build the distributable zip.
+#
+#   tools/package            build dist/hide-reengine-hud-elements-<version>.zip
+#   tools/package --list     show what the last built zip contains
+#
+# The zip is rooted at reframework/ so that extracting it into the game's
+# install directory puts every file where REFramework expects it, which is
+# exactly what the README tells a player to do. Any other rooting would make
+# the README wrong for the people least able to debug it.
+#
+# The version comes from the mod itself. A zip whose name disagrees with the
+# version string inside it is the kind of thing that generates bug reports
+# about a version nobody is running.
+
+set -euo pipefail
+
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo=$(dirname -- "$here")
+cd -- "$repo"
+
+version=$(sed -n 's/^local MOD, VERSION = .*, "\([^"]*\)".*/\1/p' \
+    reframework/autorun/hide_reengine_hud_elements.lua)
+[[ -n "$version" ]] || { echo "could not read VERSION from the mod" >&2; exit 1; }
+
+zip="dist/hide-reengine-hud-elements-$version.zip"
+
+if [[ "${1:-}" == "--list" ]]; then
+    [[ -f "$zip" ]] || { echo "no $zip — run tools/package first" >&2; exit 1; }
+    7z l "$zip"
+    exit 0
+fi
+
+"$here/run-tests" >/dev/null || { echo "tests failed; refusing to package" >&2; exit 1; }
+
+rm -rf dist/staging
+mkdir -p dist/staging/reframework/autorun/hide_reengine_hud_elements
+cp -- reframework/autorun/hide_reengine_hud_elements.lua \
+      dist/staging/reframework/autorun/
+cp -- reframework/autorun/hide_reengine_hud_elements/pure.lua \
+      reframework/autorun/hide_reengine_hud_elements/diagnostics.lua \
+      dist/staging/reframework/autorun/hide_reengine_hud_elements/
+
+# 7z rather than zip: zip is not installed on this machine and 7z is, and
+# -tzip still produces an ordinary zip, which is what Nexus and every mod
+# manager expect.
+command -v 7z >/dev/null || { echo "7z not found — install p7zip" >&2; exit 1; }
+rm -f -- "$zip"
+( cd dist/staging && 7z a -tzip -bso0 -bsp0 "../../$zip" reframework >/dev/null )
+rm -rf dist/staging
+
+echo "built $zip"
+7z l "$zip" | sed -n '/------/,$p' | sed '1d;$d'

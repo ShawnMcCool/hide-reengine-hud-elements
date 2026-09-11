@@ -258,3 +258,44 @@ Delete `hide_reengine_hud_elements.lua` and the `hide_reengine_hud_elements/` fo
 Your hide list is left in `reframework/data/` and is picked up again if you
 reinstall. Delete those files too if you want it gone.
 
+## Working on it
+
+There is no build step. The mod is three Lua files, and REFramework compiles
+them at launch — edit them in place in `reframework/autorun/` and relaunch the
+game. The two scripts below are for checking your work and cutting a release.
+
+You need `lua5.4` for the tests, and `7z` for the zip.
+
+### Tests
+
+```
+tools/run-tests
+```
+
+Covers the pure logic — key building, hide-list handling, the sharing merge —
+and drives the panel and both engine callbacks against a stubbed REFramework.
+That second part matters more than it sounds: it proves the file still loads
+without throwing, and a mod that dies on load costs a whole play session.
+
+Lua 5.4 is named explicitly because that is what REFramework embeds, and most
+systems' `lua` is now 5.5.
+
+What the tests deliberately do not cover is the engine — whether returning
+`false` actually hides an element, whether the scene probe fires on a real
+load. That is verified by playing the game against a written checklist, and is
+never described as tested.
+
+### Release zip
+
+```
+tools/package           # build dist/hide-reengine-hud-elements-<version>.zip
+tools/package --list    # show what the last built zip contains
+```
+
+Runs the tests first and refuses to build if they fail. The version is read out
+of the mod, so the zip's name cannot disagree with the version string inside
+it. The archive is rooted at `reframework/` so that extracting it into the game
+directory puts every file where REFramework expects it — any other rooting
+would make the install instructions above wrong for the people least able to
+debug them.
+
