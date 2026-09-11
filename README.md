@@ -6,7 +6,8 @@ outstays its welcome, a meter you never read.
 
 Finding the element is half the job, so the mod does that part too.
 
-Built for and tested on **Onimusha: Way of the Sword**.
+Built for and tested on **Onimusha: Way of the Sword**, and published on its
+[Nexus Mods page](https://www.nexusmods.com/onimushawayofthesword/mods/170).
 
 | Before | After |
 |---|---|
@@ -35,8 +36,11 @@ first — this mod cannot load without it.
 
 ## Installing
 
-Download the latest release and extract it into the game's install directory,
-keeping the folder structure. You should end up with:
+Download the latest release — from
+[Nexus Mods](https://www.nexusmods.com/onimushawayofthesword/mods/170) or from
+[GitHub releases](https://github.com/ShawnMcCool/hide-reengine-hud-elements/releases)
+— and extract it into the game's install directory, keeping the folder
+structure. You should end up with:
 
 ```
 <game directory>/
