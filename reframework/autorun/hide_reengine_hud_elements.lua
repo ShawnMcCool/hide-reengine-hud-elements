@@ -11,6 +11,11 @@
 -- else, which is the other half: lists export and import, so identifying an
 -- element is work one person does and everyone benefits from.
 --
+-- It is also the half you switch off. Finding watches, draws and records;
+-- Playing is the hide list and nothing else. Every cost this mod carries --
+-- the announcement feed, the probes, the dump, the transform walk -- belongs
+-- to Finding, and none of it is needed to hide anything.
+--
 -- Menu: REFramework -> ScriptRunner -> Hide RE Engine HUD Elements. Insert opens it.
 --
 -- Files, all in reframework/data/:
@@ -21,7 +26,7 @@
 -- Design and decisions: plans/001-hide-reengine-hud-elements.md.
 -- Verified REFramework API surface: docs/reframework-api.md.
 
-local MOD, VERSION = "Hide RE Engine HUD Elements", "0.6.0"
+local MOD, VERSION = "Hide RE Engine HUD Elements", "0.7.0"
 local CFG_FILE  = "hide_reengine_hud_elements.json"          -- settings
 local LIST_FILE = "hide_reengine_hud_elements_list.json"     -- the hide list, shareable
 local DIAG_FILE = "hide_reengine_hud_elements_diagnostics.json"
@@ -36,17 +41,17 @@ local diagnostics = require("hide_reengine_hud_elements.diagnostics")
 
 local WINDOW_FRAMES = 300      -- rolling mean span, about five seconds
 local DUMP_FRAMES   = 600      -- periodic dump, about ten seconds
-local EVENT_FRAMES  = 300      -- how long an overlay event line stays up
-local EVENT_MAX     = 8        -- overlay event lines shown at once
+local EVENT_FRAMES  = 300      -- how long a feed line stays up
+local EVENT_MAX     = 8        -- feed lines shown at once
 local TRACE_CAP     = 200      -- recorded transitions per trace
 local PATH_DEPTH    = 16       -- parent-walk limit
 local ROW            = 18      -- draw.text line height, fixed by REFramework
 
 local COL_LABEL = 0xFFB4B4B4   -- labels and headings
-local COL_VALUE = 0xFFFFCC33   -- numbers, and matched elements
+local COL_VALUE = 0xFFFFCC33   -- numbers, and the element being flashed
 local COL_NEW   = 0xFF44FF44   -- something seen for the first time
 local COL_ALERT = 0xFFFF5555   -- a probe that disabled itself
-local COL_PANEL = 0xB0101010   -- overlay backing
+local COL_PANEL = 0xB0101010   -- feed backing
 
 local function info(m) log.info("[" .. MOD .. "] " .. tostring(m)) end
 
@@ -74,32 +79,34 @@ local function check_imgui()
 end
 
 local cfg = {
-    mode = "observe", filter = "", announce = true, dump = true,
+    -- The one switch. Finding is the half of the product that watches, draws
+    -- and records; Playing is the hide list and nothing else.
+    --
+    -- It does not stop the mod observing. Noting which elements drew is one
+    -- table write per element and it is what makes the element browser useful
+    -- the moment the panel opens -- switching that off would leave a player
+    -- who decides to find something staring at an empty list until they went
+    -- away and made it happen again. So the switch governs output: pixels,
+    -- log lines, file writes and reflection walks. Never the ledger.
+    finding = true,
     view = "on screen", search = "",
-    overlay = true,
     -- "draw" is the fixed-size renderer font, small at 4K but known to work.
     -- "imgui" uses REFramework's own font, which honours FontSize in
     -- re2_fw_config.txt, but standalone ImGui windows from the frame callback
     -- are unproven on this build. A failure reverts to "draw" and saves that,
     -- so a setting that does not work here cannot survive a relaunch.
-    overlay_style = "draw",
+    feed_style = "draw",
 }
-local MODES = { "observe", "report", "outline", "flash", "hide" }
-local MODE_HELP = {
-    observe = "record only, nothing is hidden",
-    report  = "list matches on screen as they draw",
-    outline = "box the match at its world position",
-    flash   = "blink the match on and off",
-    hide    = "stop the match drawing",
-}
-local OVERLAY_STYLES = { "draw", "imgui" }
+local FEED_STYLES = { "draw", "imgui" }
 
--- Lowered once when the filter changes. Rebuilding it inside the draw callback
--- would allocate a string per element per frame. filter_raw is the value it was
--- derived from, reconciled once per frame, so the two cannot drift apart if the
--- filter is set by a path that does not go through save_cfg -- a hand-edited
--- config, say.
-local filter_lc, filter_raw = "", ""
+-- The element being confirm-flashed, or "" for none.
+--
+-- Deliberately not a setting. Flashing is what a player is doing in this
+-- moment, not a preference, and the substring filter it replaces was saved to
+-- the config -- so quitting while something was flashing, or while a filter
+-- was set to hide, brought that back on the next launch with nothing on screen
+-- to explain it. One element, held in memory, gone when the game closes.
+local flashing = ""
 
 do
     local ok, saved = pcall(json.load_file, CFG_FILE)
@@ -113,7 +120,7 @@ do
 end
 -- The hide list lives in its own file, separate from settings, so it can be
 -- sent to someone, backed up or hand-edited without dragging one player's
--- overlay preferences along with it.
+-- display preferences along with it.
 local list = {}
 do
     local ok, saved = pcall(json.load_file, LIST_FILE)
@@ -150,18 +157,9 @@ local function reload_list()
     return true, #list .. " entries loaded, " .. hidden_count .. " hidden"
 end
 
-local function sync_filter()
-    if filter_raw ~= cfg.filter then
-        filter_raw = cfg.filter
-        filter_lc = cfg.filter:lower()
-    end
-end
-
 local function save_cfg()
-    sync_filter()
     pcall(json.dump_file, CFG_FILE, cfg)
 end
-sync_filter()
 refresh_hidden()
 if #list > 0 then
     info("hide list: " .. #list .. " entries, " .. hidden_count .. " active")
@@ -208,8 +206,7 @@ local ROW_LIMIT = 40
 local frame = 0
 local frame_elements = 0
 local dirty = false
-local events = {}              -- transient overlay lines
-local matched, pending = {}, {}
+local events = {}              -- transient feed lines
 
 -- Free functions rather than closures: the hot path calls these per element and
 -- must not allocate. pcall takes the function and its argument directly.
@@ -218,8 +215,22 @@ local function fn_name(e) return e:call("get_GameObject"):call("get_Name") end
 local function fn_type(e) return e:get_type_definition():get_full_name() end
 local function fn_go(e) return e:call("get_GameObject") end
 
+-- Expired lines are dropped when a new one arrives, not scanned sixty times a
+-- second. That is what lets the frame callback decide whether to draw the feed
+-- at all from a single comparison, and it bounds the table in a long session.
+local newest_event = -EVENT_FRAMES
+
 local function add_event(text, colour)
-    events[#events + 1] = { text = text, colour = colour, frame = frame }
+    local keep = 0
+    for i = 1, #events do
+        if frame - events[i].frame < EVENT_FRAMES then
+            keep = keep + 1
+            events[keep] = events[i]
+        end
+    end
+    for i = #events, keep + 1, -1 do events[i] = nil end
+    events[keep + 1] = { text = text, colour = colour, frame = frame }
+    newest_event = frame
 end
 
 local function clear_cache(why, quiet)
@@ -242,29 +253,6 @@ local diag = diagnostics.new({
     end,
 })
 local probes = diag.probes
-
--- Colour accessors on the element's type, walked up the inheritance chain.
--- Records whether tinting is possible at all on this game's GUI types.
-local function colour_methods(element)
-    local out = {}
-    local ok = pcall(function()
-        local td = element:get_type_definition()
-        local depth = 0
-        while td ~= nil and depth < 5 do
-            for _, m in ipairs(td:get_methods() or {}) do
-                local n = m:get_name()
-                if n and n:find("Color", 1, true) then out[n] = true end
-            end
-            td = td:get_parent_type()
-            depth = depth + 1
-        end
-    end)
-    if not ok then return nil end
-    local list = {}
-    for n in pairs(out) do list[#list + 1] = n end
-    table.sort(list)
-    return list
-end
 
 -- Root-first transform path. Runs on first sight of a key only, never on the
 -- steady path. Also validates the walk the shipped mod reuses to let a player
@@ -298,13 +286,19 @@ local function classify(element)
 
     local key = pure.key_of(name, type_name)
     if S.seen[key] == nil then
-        local go = select(2, pcall(fn_go, element))
+        -- The transform path is diagnostic: session 3 recorded it equal to
+        -- the name on 62 elements out of 62. It costs a parent walk of up to
+        -- 16 reflection calls, so it is gathered only while finding.
+        local path = nil
+        if cfg.finding then
+            local ok_go, go = pcall(fn_go, element)
+            if ok_go and go ~= nil then path = transform_path(go) end
+        end
         S.seen[key] = {
             name = name,
             type = type_name,
-            path = go and transform_path(go) or nil,
+            path = path,
             first_frame = frame,
-            colors = colour_methods(element),
         }
         S.order[#S.order + 1] = key
         S.key_count = S.key_count + 1
@@ -313,9 +307,13 @@ local function classify(element)
         if S.names[name] == nil then S.name_count = S.name_count + 1 end
         local grew = pure.note_type(S.names, name, type_name)
         local collided = grew and #S.names[name] > 1
+        -- Logged in both states. Sixty-odd lines a session is nothing beside
+        -- the log's value as the one artefact a bug report can carry, and a
+        -- log that goes quiet while Playing would be a log that cannot explain
+        -- what the mod saw at the moment something went wrong.
         info("NEW " .. name .. "  [" .. type_name .. "]"
              .. (collided and "  COLLISION" or ""))
-        if cfg.announce then
+        if cfg.finding then
             add_event("NEW: " .. name, collided and COL_ALERT or COL_NEW)
         end
     end
@@ -353,48 +351,26 @@ re.on_pre_gui_draw_element(function(element)
     if name == false then return true end            -- fail open
 
     -- One table write per element per frame, and the whole basis of finding:
-    -- an element the player can see right now is one that drew recently.
+    -- an element the player can see right now is one that drew recently. It
+    -- happens while Playing too -- see the note on cfg.finding.
     live[name] = frame
 
-    local matched = filter_lc ~= ""
-        and name:lower():find(filter_lc, 1, true) ~= nil
-
-    -- Flash comes before the list so an element already on it can still be
-    -- blinked. Otherwise confirming what a listed entry actually is would mean
-    -- removing it first.
-    if matched and cfg.mode == "flash" then
+    -- Confirm flash comes before the hide list so an element already listed can
+    -- still be blinked; otherwise checking what an entry actually is would mean
+    -- deleting it first. One string comparison, and skipped outright while
+    -- nothing is flashing, which is every frame a player is not identifying.
+    if flashing ~= "" and name == flashing then
         return (frame % 30) < 15
     end
 
     -- The hide list. One hash lookup, skipped entirely while the list is empty,
     -- which is the state the tool sits in until a player puts something in it.
     if hidden_count > 0 and hidden[name] then return false end
-
-    if matched then
-        local mode = cfg.mode
-        if mode == "report" or mode == "outline" then
-            local pos = nil
-            if mode == "outline" then
-                local ok_go, go = pcall(fn_go, element)
-                if ok_go and go ~= nil then
-                    local ok_pos, p = pcall(function()
-                        local tf = go:call("get_Transform")
-                        return tf and tf:call("get_Position")
-                    end)
-                    if ok_pos then pos = p end
-                end
-            end
-            pending[#pending + 1] = { name = name, pos = pos }
-            return true
-        elseif mode == "hide" then
-            return false
-        end
-    end
     return true
 end)
 
 -- Which namespace binds get_display_size is unconfirmed, so try both once and
--- remember. The fallback keeps the overlay on screen either way.
+-- remember. The fallback keeps the feed on screen either way.
 local display = nil
 local function display_size()
     if display ~= nil then return display end
@@ -456,7 +432,7 @@ local function is_live(name)
     return at ~= nil and (frame - at) <= LIVE_GRACE
 end
 
--- One list, four ways of looking at it. Finding and hiding are the same
+-- One list, three ways of looking at it. Finding and hiding are the same
 -- surface: whether an element is hidden is a property of a row, not a
 -- different screen.
 local VIEWS = { "on screen", "new", "everything" }
@@ -506,15 +482,10 @@ local function rows_for(view, search)
     return out
 end
 
-local function set_filter(value)
-    cfg.filter = value
-    save_cfg()
-end
-
--- Selecting an element and entering a mode are one action, not two. Splitting
--- them across a text box and a radio list is what made the tool unusable in
--- session 1: the player knows which thing they want gone, not which mode a
--- filter belongs to.
+-- Picking an element and confirming it are one action, not two. Splitting them
+-- across a text box and a radio list is what made the tool unusable in session
+-- 1: a player knows which thing they want gone, not which mode a filter
+-- belongs to.
 local function hide_add(name, label)
     if pure.entry_add(list, pure.new_entry(name, label, true)) then
         save_list()
@@ -535,11 +506,18 @@ local function hide_remove(name)
     return false
 end
 
-local function select_element(name, mode)
-    cfg.filter = name
-    cfg.mode = mode
-    save_cfg()
-    info("selected " .. name .. " in mode " .. mode)
+-- Confirm flash. With the names unreadable this is the only identification
+-- mechanism the tool has, not a convenience, so it is the only temporary state
+-- left: one element blinking, or none.
+--
+-- Pressing Flash on whatever is already flashing stops it. The button that
+-- starts the blinking is the one already under the player's hand, and on the
+-- row they are already looking at -- which makes the banner's Stop a
+-- convenience rather than the single way out of a state the mod entered.
+local function flash(name)
+    if name == flashing then name = "" end
+    flashing = name
+    info(name == "" and "flash stopped" or ("flashing " .. name))
 end
 
 -- Widgets, each degrading to something harmless when the binding is absent.
@@ -670,41 +648,30 @@ end
 local function tc(s, colour) ui.colored(s, colour) end
 
 -- ---------------------------------------------------------------------------
--- Overlay
+-- The feed
 -- ---------------------------------------------------------------------------
+--
+-- What the mod says out loud, in game, while finding: an element appeared, one
+-- went on the hide list, a load happened. Nothing else.
+--
+-- It used to lead with telemetry -- elements per frame, key and collision
+-- counts, cache hit rate, probe health -- and that was the same data the
+-- panel's Diagnostics section already shows, rendered a second time, sixty
+-- times a second, in the one place a player cannot close. Building those lines
+-- meant a string.format per line and a full scan-and-sort of every name seen,
+-- every frame, to count collisions nobody was reading.
+--
+-- With only events left the feed is usually empty, and an empty feed draws
+-- nothing at all: no backing rectangle, no text, no allocation. That is the
+-- difference between a block a player wants gone and one they never notice.
 
-local function overlay_lines()
-    local lines = {
-        { MOD .. " " .. VERSION, COL_LABEL },
-        { string.format("elems/frame %d  max %d  avg %d",
-            stats.last, stats.max, math.floor(pure.window_mean(stats.window) + 0.5)),
-          COL_VALUE },
-    }
-
-    local collisions = pure.collisions(S.names)
-    lines[#lines + 1] = {
-        string.format("keys %d  names %d  collisions %d",
-            S.key_count, S.name_count, #collisions),
-        #collisions > 0 and COL_ALERT or COL_VALUE }
-
-    if hidden_count > 0 then
-        lines[#lines + 1] = { "hiding " .. hidden_count .. " of "
-            .. #list .. " listed", COL_NEW }
-    end
-
-    local disabled = diag.disabled()
-    lines[#lines + 1] = {
-        string.format("cache %s  probes %s",
-            pure.percent(pure.cache_hit_rate(stats)),
-            #disabled == 0 and "ok" or ("DOWN " .. table.concat(disabled, ","))),
-        #disabled == 0 and COL_VALUE or COL_ALERT }
-
-    local shown = 0
+local function feed_lines()
+    local lines = {}
     for i = #events, 1, -1 do
         local e = events[i]
-        if frame - e.frame < EVENT_FRAMES and shown < EVENT_MAX then
+        if #lines >= EVENT_MAX then break end
+        if frame - e.frame < EVENT_FRAMES then
             lines[#lines + 1] = { e.text, e.colour }
-            shown = shown + 1
         end
     end
     return lines
@@ -713,22 +680,22 @@ end
 -- NoTitleBar|NoResize|NoMove|NoScrollbar|NoCollapse|AlwaysAutoResize|
 -- NoSavedSettings|NoInputs|NoFocusOnAppearing. A passive block that cannot be
 -- dragged, focused or interacted with.
-local OVERLAY_FLAGS = 1 + 2 + 4 + 8 + 32 + 64 + 256 + 512 + 4096
+local FEED_FLAGS = 1 + 2 + 4 + 8 + 32 + 64 + 256 + 512 + 4096
 
 -- Begin must be paired with End whatever it returns, so end_window is called on
 -- both paths. If any of this throws, the caller drops to the draw.* renderer
 -- permanently rather than leaving ImGui's stack unbalanced a second time.
-local function overlay_imgui(lines, size)
+local function feed_imgui(lines, size)
     imgui.set_next_window_pos(
         Vector2f.new(size.x * 0.012, size.y * 0.045), 1, Vector2f.new(0, 0))
-    local open = imgui.begin_window("##" .. MOD .. "_overlay", true, OVERLAY_FLAGS)
+    local open = imgui.begin_window("##" .. MOD .. "_feed", true, FEED_FLAGS)
     if open then
         for _, l in ipairs(lines) do tc(l[1], l[2]) end
     end
     imgui.end_window()
 end
 
-local function overlay_draw(lines, size)
+local function feed_draw(lines, size)
 
     -- Anchored as a fraction of the display, so the block sits correctly at
     -- 1080p, 1440p, 4K and ultrawide alike. Row spacing stays at the fixed
@@ -753,19 +720,23 @@ local function overlay_draw(lines, size)
     end
 end
 
-local function draw_overlay()
-    local lines = overlay_lines()
+local function draw_feed()
+    -- The whole steady-state cost of the feed, on a frame with nothing to say.
+    if frame - newest_event >= EVENT_FRAMES then return end
+
+    local lines = feed_lines()
+    if #lines == 0 then return end
     local size = display_size()
 
-    if cfg.overlay_style == "imgui" then
-        if pcall(overlay_imgui, lines, size) then return end
+    if cfg.feed_style == "imgui" then
+        if pcall(feed_imgui, lines, size) then return end
         -- Saved, not just switched: a style that does not render on this build
         -- must not come back on the next launch and cost another session.
-        cfg.overlay_style = "draw"
+        cfg.feed_style = "draw"
         save_cfg()
-        info("imgui overlay failed to render; reverted to the draw overlay")
+        info("imgui feed failed to render; reverted to the draw renderer")
     end
-    overlay_draw(lines, size)
+    feed_draw(lines, size)
 end
 
 -- ---------------------------------------------------------------------------
@@ -809,37 +780,27 @@ end
 
 re.on_frame(function()
     frame = frame + 1
-    sync_filter()
-    -- Quiet: this fires every five seconds and would otherwise fill the log,
-    -- which is the one artefact a bug report can carry.
+
+    -- Above the Playing guard, all of it, because it is correctness rather
+    -- than output. Addresses are recycled when objects are freed, so a cache
+    -- that stopped expiring while Playing would eventually hide an element the
+    -- player never chose -- the one failure this mod must not have. Quiet:
+    -- this fires every five seconds and would otherwise fill the log.
     if (frame % CACHE_TTL_FRAMES) == 0 then clear_cache("periodic", true) end
     pure.record_frame(stats, frame_elements)
     frame_elements = 0
-    matched, pending = pending, {}
+
+    -- Playing stops here. Below this line is every per-frame cost the mod has:
+    -- the probes' reflection calls, the feed's draw calls, and the dump's
+    -- file write. A player who has finished finding pays for none of it.
+    if not cfg.finding then return end
 
     local changed = diag.poll(frame)
-
-    if cfg.overlay then draw_overlay() end
-
-    if cfg.mode == "report" or cfg.mode == "outline" then
-        local size = display_size()
-        local y = math.floor(size.y * 0.35)
-        for _, m in ipairs(matched) do
-            pcall(draw.text, "MATCH: " .. m.name, math.floor(size.x * 0.012), y, COL_VALUE)
-            y = y + ROW
-            if cfg.mode == "outline" and m.pos ~= nil then
-                local ok, sp = pcall(draw.world_to_screen, m.pos)
-                if ok and sp ~= nil then
-                    pcall(draw.outline_rect, sp.x - 45, sp.y - 45, 90, 90, COL_VALUE)
-                    pcall(draw.text, m.name, sp.x - 45, sp.y - 60, COL_VALUE)
-                end
-            end
-        end
-    end
+    draw_feed()
 
     -- Dump on every transition, and otherwise periodically. The launch crash
     -- rate means a session that dies in combat must still leave usable output.
-    if cfg.dump and (changed or (frame % DUMP_FRAMES) == 0) then
+    if changed or (frame % DUMP_FRAMES) == 0 then
         if changed or dirty then dump(changed and "transition" or "periodic") end
     end
 end)
@@ -982,9 +943,27 @@ local function panel_body()
         ui.text("opaque id, so the label is the only record of what you")
         ui.text("found, and it is what makes a list worth sending to")
         ui.text("someone else. See Share a list.")
+        ui.text("")
+        ui.text("WHEN YOU ARE DONE: switch to Playing, at the bottom.")
+        ui.text("Your hide list keeps working. The mod stops watching,")
+        ui.text("stops drawing the block in the corner, and stops")
+        ui.text("writing files. Switch back to Finding whenever the next")
+        ui.text("thing starts annoying you.")
         ui.node_end()
     end
     ui.separator()
+
+    -- At the top, because it is a state the mod entered and the player has to
+    -- be able to leave, and because the Flash buttons that set it are on two
+    -- different lists further down -- one of them below forty rows of browser.
+    -- A player who cannot find this cannot stop the blinking.
+    if flashing ~= "" then
+        if ui.button("Stop flashing") then flash("") end
+        ui.same_line()
+        tc("  " .. flashing .. " is blinking. That is not hiding it -- press"
+           .. " Hide on its row for that.", COL_VALUE)
+        ui.separator()
+    end
 
     -- One list. Whether an element is hidden is a property of its row, not a
     -- different screen: finding and hiding are the same surface.
@@ -1001,7 +980,22 @@ local function panel_body()
     local delete_me = nil
     for _, entry in ipairs(list) do
         local name = entry.name
-        if ui.button("Flash##list_" .. name) then select_element(name, "flash") end
+
+        -- The entry names itself first, on a line of its own: what this is,
+        -- before what you can do to it. It read the other way round -- three
+        -- controls, then the name trailing off the end -- which put the one
+        -- word identifying the row in the position a caption goes.
+        --
+        -- Nothing interactive shares this line, so a long name or a long
+        -- provenance has nothing to push off the edge of the window.
+        local heading = name
+            .. (is_live(name) and "   (on screen)" or "   (not drawing)")
+        if entry.from ~= nil and entry.from ~= "" then
+            heading = heading .. "   from " .. entry.from
+        end
+        tc(heading, entry.on and COL_NEW or COL_LABEL)
+
+        if ui.button("Flash##list_" .. name) then flash(name) end
         ui.same_line()
         if ui.button("Del##list_" .. name) then delete_me = name end
         ui.same_line()
@@ -1014,19 +1008,12 @@ local function panel_body()
             entry.on = on
             save_list()
         end
-        ui.same_line()
-        tc("  " .. name, entry.on and COL_NEW or COL_LABEL)
-        ui.same_line()
-        tc(is_live(name) and "  (on screen)" or "  (not drawing)", COL_LABEL)
-        if entry.from ~= nil and entry.from ~= "" then
-            ui.same_line()
-            tc("  from " .. entry.from, COL_LABEL)
-        end
 
         -- Always editable, never behind an Edit button: writing down what an
         -- element is, right after flashing it, is the step that makes the list
         -- worth anything to anyone else. Its own line, because a text field
-        -- takes the full width.
+        -- takes the full width, and its caption sits above it for the same
+        -- reason the name does.
         local changed_label, label = ui.input(
             "what this is##label_" .. name, entry.label)
         if changed_label then entry.label = label; save_list() end
@@ -1077,20 +1064,22 @@ local function panel_body()
             or "  nothing matches", COL_LABEL)
     end
 
+    -- Controls first, text last. An element name, a label and a sentence of
+    -- help all land on this line, and text is the only thing on it whose width
+    -- is not bounded -- so anything placed after it is placed off the window.
     for i = 1, shown do
         local name = rows[i].name
         local listed = pure.entry_index(list, name) ~= nil
-        tc(is_live(name) and "*" or " ", is_live(name) and COL_NEW or COL_LABEL)
+        if ui.button("Flash##row_" .. name) then flash(name) end
         ui.same_line()
-        if ui.button("Flash##row_" .. name) then select_element(name, "flash") end
-        ui.same_line()
-        if listed then
-            tc("  " .. name .. "   already on the list above", COL_NEW)
-        else
+        if not listed then
             if ui.button("Hide##row_" .. name) then hide_add(name) end
             ui.same_line()
-            tc("  " .. name, COL_VALUE)
         end
+        tc(is_live(name) and "  *" or "   ", is_live(name) and COL_NEW or COL_LABEL)
+        ui.same_line()
+        tc("  " .. name .. (listed and "   already on the list above" or ""),
+           listed and COL_NEW or COL_VALUE)
     end
     ui.separator()
 
@@ -1139,43 +1128,31 @@ local function panel_body()
     end
     ui.separator()
 
-    -- Flash is temporary state, separate from the list. Saying so avoids the
-    -- trap of flashing something, seeing it blink, and assuming it is dealt
-    -- with.
-    if cfg.mode ~= "observe" and cfg.filter ~= "" then
-        tc("TEMPORARY: " .. cfg.mode .. " on " .. cfg.filter
-           .. "  (not on the hide list)", COL_VALUE)
-        ui.same_line()
-        if ui.button("Stop") then select_element("", "observe") end
-        ui.separator()
+    -- The switch, on the panel rather than in a collapsed section, because it
+    -- is the one control a player still touches after they have finished
+    -- finding -- and because the block it silences is the thing they will come
+    -- here wanting rid of.
+    tc("THIS MOD IS", COL_LABEL)
+    if ui.radio("Finding", cfg.finding) and not cfg.finding then
+        cfg.finding = true; save_cfg()
+        info("finding: feed, probes and dump are on")
     end
-
-
-    if ui.node("Manual control") then
-        for _, m in ipairs(MODES) do
-            if ui.radio(m, cfg.mode == m) then cfg.mode = m; save_cfg() end
-            ui.same_line()
-            tc("  " .. MODE_HELP[m], COL_LABEL)
-        end
-        local fchanged, fv = ui.input("filter (substring)", cfg.filter)
-        if fchanged then set_filter(fv) end
-
-        -- A filter matching nothing, or eleven things, should be visible before
-        -- a mode is set to hide.
-        if cfg.filter ~= "" then
-            local hits, lc = {}, cfg.filter:lower()
-            for _, rec in pairs(S.seen) do
-                if rec.name:lower():find(lc, 1, true) then hits[#hits + 1] = rec.name end
-            end
-            table.sort(hits)
-            tc("  matches " .. #hits .. ": " .. table.concat(hits, ", "),
-               #hits == 0 and COL_ALERT or COL_VALUE)
-        end
-        ui.node_end()
+    ui.same_line()
+    tc("  watching, announcing what it sees, writing diagnostics", COL_LABEL)
+    if ui.radio("Playing", not cfg.finding) and cfg.finding then
+        cfg.finding = false; save_cfg()
+        info("playing: feed, probes and dump are off")
+        dump("switched to playing")
     end
+    ui.same_line()
+    tc("  your hide list, and nothing else", COL_LABEL)
     ui.separator()
 
-    tc("FINDINGS", COL_LABEL)
+    -- Everything below is developer-facing and was, until now, the tallest
+    -- always-expanded block on the panel -- which pushed the only control a
+    -- player needs off the bottom of the window.
+    if not ui.node("Diagnostics") then return end
+
     kv("Elements/frame", string.format("%d   min %d   max %d   avg %d",
         stats.last, stats.min or 0, stats.max,
         math.floor(pure.window_mean(stats.window) + 0.5)))
@@ -1204,11 +1181,12 @@ local function panel_body()
         end
     end
     kv("Scene / flow changes", #diag.scene_trace .. " / " .. #diag.flow_trace)
-    kv("Hide list", #list == 0 and "empty"
-        or (hidden_count .. " hidden of " .. #list .. " listed"),
-        #list == 0 and COL_LABEL or COL_NEW)
 
     if ui.node("Details") then
+        -- Measured here as well as by the feed. While Playing the feed never
+        -- runs, so without this the one line a bug report would quote reads
+        -- "nil" -- not because the probe failed, but because nothing asked.
+        display_size()
         ui.text("package.path = " .. tostring(diag.findings.package_path))
         ui.text("display = " .. tostring(diag.findings.display_size)
             .. " via " .. tostring(diag.findings.display_size_namespace))
@@ -1219,20 +1197,18 @@ local function panel_body()
     end
     ui.separator()
 
-    tc("DISPLAY", COL_LABEL)
-    local changed, v = ui.checkbox("On-screen overlay", cfg.overlay)
-    if changed then cfg.overlay = v; save_cfg() end
-    changed, v = ui.checkbox("Announce new elements", cfg.announce)
-    if changed then cfg.announce = v; save_cfg() end
-    for _, style in ipairs(OVERLAY_STYLES) do
-        if ui.radio("overlay: " .. style, cfg.overlay_style == style) then
-            cfg.overlay_style = style; save_cfg()
+    tc("FEED", COL_LABEL)
+    tc("  which renderer draws the announcements in the corner", COL_LABEL)
+    for _, style in ipairs(FEED_STYLES) do
+        if ui.radio(style, cfg.feed_style == style) then
+            cfg.feed_style = style; save_cfg()
         end
         ui.same_line()
         tc(style == "draw" and "  fixed size, small at 4K, always works"
                             or "  uses the REFramework font size, unproven here", COL_LABEL)
     end
     if ui.button("Dump now") then dump("manual") end
+    ui.node_end()
 end
 
 re.on_draw_ui(function()
@@ -1268,9 +1244,11 @@ end)
 
 diag.at_load()
 diag.findings.imgui_missing = check_imgui()
-info("loaded " .. VERSION .. " (mode " .. cfg.mode .. ")")
+info("loaded " .. VERSION .. " (" .. (cfg.finding and "finding" or "playing") .. ")")
 
 -- Returned for the desktop tests. REFramework ignores an autorun chunk's
--- return value, so this costs nothing in game.
+-- return value, so this costs nothing in game. flashing is a local rather than
+-- a field, so it is handed over as an accessor pair.
 return { pure = pure, state = S, cfg = cfg, list = list, diag = diag,
-         rows_for = rows_for, is_live = is_live }
+         rows_for = rows_for, is_live = is_live,
+         flash = flash, flashing = function() return flashing end }

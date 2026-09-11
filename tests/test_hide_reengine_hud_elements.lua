@@ -119,6 +119,27 @@ local summary = pure.probe_summary({ a = p, b = pure.new_probe("flow") })
 eq("only disabled probes summarised", #summary, 1)
 eq("summary names the probe", summary[1], "scene")
 
+-- A probe that answers nothing is as useless as one that throws, and neither
+-- of the two scene probes raises when it has nothing: they return nil forever.
+-- On another RE Engine title that is the expected case, so retiring on failure
+-- alone would leave a dead probe being asked sixty times a second.
+local barren = pure.new_probe("scene")
+for i = 1, pure.BARREN_POLLS do
+    barren.ran = i
+    pure.probe_result(barren, nil)
+end
+eq("a probe that never answers retires", barren.disabled, true)
+check("and says why", tostring(barren.reason):find("no value", 1, true) ~= nil,
+    barren.reason)
+
+local answering = pure.new_probe("flow")
+for i = 1, pure.BARREN_POLLS * 2 do
+    answering.ran = i
+    pure.probe_result(answering, i == 1 and "110" or nil)
+end
+eq("a probe that answered once is never retired for silence",
+    answering.disabled, false)
+
 local trace = {}
 eq("trace accepts within cap", pure.push_trace(trace, { frame = 1 }, 2), true)
 pure.push_trace(trace, { frame = 2 }, 2)
@@ -218,22 +239,32 @@ local env3, ok3, L3 = load_logger(topts)
 check("third instance loads", ok3, ok3 and "" or L3)
 local tick = env3.callbacks.on_frame
 
-for _ = 1, 3 do tick() end
+-- The probes are polled four times a second, not sixty, so a step here has to
+-- run enough frames to contain several polls. That cadence is also what
+-- debounces the load bounce -- 110 -> 000 -> 001 two frames apart -- into the
+-- single transition it actually is.
+local POLL_SPAN = 15
+local function polls(n) for _ = 1, n * POLL_SPAN do tick() end end
+
+polls(3)
 eq("no scene transition without a change", #L3.diag.scene_trace, 0)
 eq("no flow transition without a change", #L3.diag.flow_trace, 0)
 
 topts.scene = 0x22220000
-for _ = 1, 5 do tick() end
+polls(5)
 eq("scene change recorded exactly once", #L3.diag.scene_trace, 1)
 eq("transition records the frame", type(L3.diag.scene_trace[1].frame), "number")
 
 topts.flow_singleton = stub.flow({ get_IsIngame = true })
-for _ = 1, 5 do tick() end
+polls(5)
 eq("flow change recorded exactly once", #L3.diag.flow_trace, 1)
 
 topts.scene = 0x33330000
-for _ = 1, 4 do tick() end
+polls(4)
 eq("a second scene change is also recorded once", #L3.diag.scene_trace, 2)
+
+-- Sixty frames of play must not be sixty polls.
+eq("polled once per span, not once per frame", L3.diag.probes.scene.ran, 17)
 
 -- The scene probe must survive a singleton that hands back a bare address.
 check("scene probe still running", L3.diag.probes.scene.disabled == false,
@@ -241,34 +272,97 @@ check("scene probe still running", L3.diag.probes.scene.disabled == false,
 env3.restore()
 
 -- ---------------------------------------------------------------------------
-group("filter and modes")
+group("finding and playing")
 -- ---------------------------------------------------------------------------
--- Returning false is the shipped mod's whole hiding mechanism, and the filter
--- is how a candidate is selected before it is hidden. A saved config must
--- reach both without the panel being opened.
-local env4, ok4, L4 = load_logger({ config = { mode = "hide", filter = "gauge" } })
+-- Playing is the hide list and nothing else: no probes, no feed, no dump.
+--
+-- What it must not stop is observing. A player switches to Playing and keeps
+-- playing; when the next thing annoys them they open the panel expecting to
+-- see what just drew, and an empty browser would mean going away and making it
+-- happen all over again.
+local env4, ok4, L4 = load_logger({
+    config = { finding = false },
+    scene_singleton = {}, scene = 0x11110000,
+    flow_singleton = stub.flow({ get_IsMainMenu = true }),
+    hide_list = { { name = "EnemyGauge", label = "the gauge", on = true } },
+})
 check("fourth instance loads", ok4, ok4 and "" or L4)
-eq("mode read from config", L4.cfg.mode, "hide")
-eq("filter read from config", L4.cfg.filter, "gauge")
+eq("playing read from config", L4.cfg.finding, false)
 
 local hot4 = env4.callbacks.on_pre_gui_draw_element
 local target = stub.element(0xC000, "EnemyGauge", "via.gui.Control", { "EnemyGauge" })
 local other = stub.element(0xD000, "PlayerHealth", "via.gui.Control", { "PlayerHealth" })
-eq("matching element is hidden", hot4(target), false)
-eq("non-matching element still draws", hot4(other), true)
-eq("match is case insensitive", hot4(stub.element(0xE000, "BOSSGAUGE",
-    "via.gui.Control", { "BOSSGAUGE" })), false)
+eq("a listed element is hidden while playing", hot4(target), false)
+eq("an unlisted element still draws", hot4(other), true)
+eq("fail-open survives while playing",
+    hot4(stub.element(0xF000, nil, nil, nil, true)), true)
 
--- Even while hiding, discovery keeps running: the hidden element is recorded.
-check("hidden element was still recorded",
-    L4.state.seen[pure.key_of("EnemyGauge", "via.gui.Control")] ~= nil)
-eq("hidden elements still counted", (function()
+-- Observation continues.
+check("elements are still recorded while playing",
+    L4.state.seen[pure.key_of("PlayerHealth", "via.gui.Control")] ~= nil)
+eq("and are still on screen while playing", L4.is_live("PlayerHealth"), true)
+eq("hidden elements are still counted", (function()
     env4.callbacks.on_frame(); return L4.state.stats.last end)(), 3)
 
--- An unidentifiable element must draw even when a filter is hiding things.
-eq("fail-open survives hide mode",
-    hot4(stub.element(0xF000, nil, nil, nil, true)), true)
+-- The transform walk is up to sixteen reflection calls and answers nothing a
+-- player reads, so it is the one thing observation gives up while playing.
+eq("the transform walk is skipped while playing",
+    L4.state.seen[pure.key_of("PlayerHealth", "via.gui.Control")].path, nil)
+
+-- Long enough to pass both the poll cadence and the periodic dump.
+for _ = 1, 700 do env4.callbacks.on_frame() end
+eq("the scene probe is never polled while playing", L4.diag.probes.scene.ran, 0)
+eq("nor the flow probe", L4.diag.probes.flow.ran, 0)
+local wrote_diag = false
+for _, d in ipairs(env4.dumps) do
+    if d.name == "hide_reengine_hud_elements_diagnostics.json" then wrote_diag = true end
+end
+check("no diagnostics file is written while playing", not wrote_diag)
+
+-- The cache is still bounded in time, because a recycled address hiding the
+-- wrong element is the one failure this mod must not have -- and it is exactly
+-- the failure a player would meet while playing rather than while finding.
+local misses_before_expiry = L4.state.stats.cache_misses
+hot4(target)
+check("the cache still expires while playing",
+    L4.state.stats.cache_misses > misses_before_expiry, L4.state.stats.cache_misses)
+
+env4.opts.click = "Finding"
+pcall(env4.callbacks.on_draw_ui)
+env4.opts.click = nil
+eq("the panel switches back to finding", L4.cfg.finding, true)
+
+-- Pressing the option already selected must not write the config, or holding
+-- the panel open would rewrite it sixty times a second.
+local cfg_writes_before = 0
+for _, d in ipairs(env4.dumps) do
+    if d.name == "hide_reengine_hud_elements.json" then
+        cfg_writes_before = cfg_writes_before + 1
+    end
+end
+env4.opts.click = "Finding"
+pcall(env4.callbacks.on_draw_ui)
+env4.opts.click = nil
+local cfg_writes_after = 0
+for _, d in ipairs(env4.dumps) do
+    if d.name == "hide_reengine_hud_elements.json" then
+        cfg_writes_after = cfg_writes_after + 1
+    end
+end
+eq("choosing the state already in force saves nothing",
+    cfg_writes_after - cfg_writes_before, 0)
 env4.restore()
+
+-- radio_button is absent in REFramework 01417, so in game the switch is really
+-- a button carrying its own state. That is the path a player presses.
+local env4b, ok4b, L4b = load_logger({ config = { finding = true },
+                                       remove = { "radio_button" } })
+check("switch instance loads without radio_button", ok4b, ok4b and "" or L4b)
+env4b.opts.click = "( ) Playing"
+pcall(env4b.callbacks.on_draw_ui)
+env4b.opts.click = nil
+eq("the switch works without imgui.radio_button", L4b.cfg.finding, false)
+env4b.restore()
 
 -- ---------------------------------------------------------------------------
 group("panel")
@@ -295,30 +389,49 @@ local recent = L5.state.order
 eq("order records every key", #recent, 3)
 eq("order is first-sight order", pure.name_of_key(recent[3]), "GUI030400")
 
--- Clicking a candidate must set the filter, since the names are unusable ids
--- and typing them by hand is what made the tool unusable in the first place.
--- Flash and Hide are one gesture each: they pick the element and enter the
--- mode together. Splitting that across a text box and a radio list is what
--- made the tool unusable on first contact.
+-- Clicking a candidate must select it outright, since the names are unusable
+-- ids and typing them by hand is what made the tool unusable in the first
+-- place. Flash and Hide are one gesture each.
 env5.opts.click = "Flash##row_GUI020210"
 local clicked, cerr = pcall(env5.callbacks.on_draw_ui)
 check("panel renders with a click", clicked, cerr)
-eq("Flash selects the element", L5.cfg.filter, "GUI020210")
-eq("Flash enters flash mode", L5.cfg.mode, "flash")
+eq("Flash selects the element", L5.flashing(), "GUI020210")
 
--- Stop has to be reachable, because it is how a player leaves a temporary mode.
-env5.opts.click = "Stop"
+-- Pressing Flash on what is already flashing stops it. This is the escape
+-- hatch that does not depend on finding a second control: the button that
+-- started the blinking is on the row the player is already looking at.
+env5.opts.click = "Flash##row_GUI020210"
 pcall(env5.callbacks.on_draw_ui)
-eq("Stop clears the filter", L5.cfg.filter, "")
-eq("Stop returns to observe", L5.cfg.mode, "observe")
+eq("Flash again on the same element stops it", L5.flashing(), "")
 env5.opts.click = nil
 
--- With nothing hidden the Stop button is absent, so a stray click cannot
--- reach it and the state line reads as recording.
-env5.opts.click = "Stop"
+-- And the banner's own button, which is the one that was unreachable in game:
+-- it sat after the message on the same line, and at 24 pixels per character
+-- that put it past the right edge of the window.
+env5.opts.click = "Flash##row_GUI020210"
 pcall(env5.callbacks.on_draw_ui)
-eq("Stop is absent while observing", L5.cfg.mode, "observe")
+env5.opts.click = "Stop flashing"
+pcall(env5.callbacks.on_draw_ui)
+eq("Stop flashing clears the flash", L5.flashing(), "")
 env5.opts.click = nil
+
+-- With nothing flashing the button is not rendered at all, so a stray click
+-- cannot reach it.
+env5.opts.click = "Stop flashing"
+pcall(env5.callbacks.on_draw_ui)
+eq("Stop flashing is absent while nothing is flashing", L5.flashing(), "")
+env5.opts.click = nil
+
+-- Flashing is not a setting. Saving it meant that quitting mid-flash brought
+-- the blinking back on the next launch with nothing on screen to explain it.
+env5.opts.click = "Flash##row_GUI020210"
+pcall(env5.callbacks.on_draw_ui)
+env5.opts.click = nil
+for _, d in ipairs(env5.dumps) do
+    if d.name == "hide_reengine_hud_elements.json" then
+        eq("flashing is never written to the config", d.data.flashing, nil)
+    end
+end
 
 -- ImGui identifies a tree node by its label, so a label that varies gives the
 -- node a new identity and collapses it. Pressing Flash must not shut the panel.
@@ -330,7 +443,7 @@ pcall(env5.callbacks.on_draw_ui)
 env5.opts.click = nil
 env5.tree_labels = {}
 pcall(env5.callbacks.on_draw_ui)
-eq("the mode changed", L5.cfg.mode, "flash")
+eq("the flash target changed", L5.flashing(), "GUI020102")
 eq("the panel's label does not change with it", env5.tree_labels[1], label_before)
 env5.restore()
 
@@ -381,31 +494,47 @@ check("the panel never calls imgui.new_line",
 env14.restore()
 
 -- ---------------------------------------------------------------------------
-group("overlay style")
+group("the feed")
 -- ---------------------------------------------------------------------------
--- The imgui overlay is unproven on this build. If it throws it must fall back
+-- An empty feed draws nothing at all -- no window, no backing rectangle, no
+-- text. That is what makes it something a player never notices rather than a
+-- block in the corner they come to the panel wanting rid of.
+local envF, okF, LF = load_logger({ config = { feed_style = "imgui" },
+                                    no_windows = true })
+check("feed instance loads", okF, okF and "" or LF)
+local quiet, qerr = pcall(envF.callbacks.on_frame)
+check("a silent feed does not touch the renderer at all", quiet, qerr)
+eq("and so does not trip the fallback", LF.cfg.feed_style, "imgui")
+envF.restore()
+
+-- The imgui renderer is unproven on this build. If it throws it must fall back
 -- and persist the fallback, so a setting that does not work here cannot come
 -- back on the next launch and cost another session.
-local env6, ok6, L6 = load_logger({ config = { overlay_style = "imgui" } })
+local env6, ok6, L6 = load_logger({ config = { feed_style = "imgui" } })
 check("sixth instance loads", ok6, ok6 and "" or L6)
-eq("imgui overlay style read from config", L6.cfg.overlay_style, "imgui")
+eq("imgui feed style read from config", L6.cfg.feed_style, "imgui")
+-- A new element is an announcement, which is the only thing the feed draws.
+env6.callbacks.on_pre_gui_draw_element(
+    stub.element(0x1, "GUI020102", "via.gui.GUI", { "GUI020102" }))
 env6.callbacks.on_frame()
-eq("working imgui overlay is kept", L6.cfg.overlay_style, "imgui")
+eq("a working imgui feed is kept", L6.cfg.feed_style, "imgui")
 env6.restore()
 
-local env7, ok7, L7 = load_logger({ config = { overlay_style = "imgui" },
+local env7, ok7, L7 = load_logger({ config = { feed_style = "imgui" },
                                     no_windows = true })
 check("seventh instance loads", ok7, ok7 and "" or L7)
+env7.callbacks.on_pre_gui_draw_element(
+    stub.element(0x1, "GUI020102", "via.gui.GUI", { "GUI020102" }))
 local ferr
 ok7, ferr = pcall(env7.callbacks.on_frame)
-check("a failing imgui overlay does not propagate", ok7, ferr)
-eq("failure reverts to the draw overlay", L7.cfg.overlay_style, "draw")
+check("a failing imgui feed does not propagate", ok7, ferr)
+eq("failure reverts to the draw renderer", L7.cfg.feed_style, "draw")
 local saved
 for _, d in ipairs(env7.dumps) do
     if d.name == "hide_reengine_hud_elements.json" then saved = d.data end
 end
-check("the revert is saved to config", saved ~= nil and saved.overlay_style == "draw",
-    saved and saved.overlay_style)
+check("the revert is saved to config", saved ~= nil and saved.feed_style == "draw",
+    saved and saved.feed_style)
 env7.restore()
 
 -- ---------------------------------------------------------------------------
@@ -506,8 +635,7 @@ eq("fail-open beats the hide list",
 env8.opts.click = "Flash##row_GUI020102"
 pcall(env8.callbacks.on_draw_ui)
 env8.opts.click = nil
-eq("Flash works on an element already hidden", L8.cfg.mode, "flash")
-eq("Flash targets it", L8.cfg.filter, "GUI020102")
+eq("Flash works on an element already hidden", L8.flashing(), "GUI020102")
 
 local seen_true, seen_false = false, false
 for _ = 1, 60 do
@@ -803,6 +931,54 @@ do
     eq("no control is placed after a text field on the same line", #offenders, 0)
     if #offenders > 0 then
         io.write("    offending lines: " .. table.concat(offenders, ", ") .. "\n")
+    end
+
+    -- The same rule, generalised, and the one that would have caught the Stop
+    -- button. Text is the only thing whose width is unbounded: a name, a label
+    -- and a sentence of help all end up on the line, and at 24 pixels per
+    -- character on a 4K display "FLASHING GUI020102  (not hidden -- press Hide
+    -- for that)" is 1320 pixels wide before the button is placed. The button
+    -- was laid out past the right edge of the window, where a player can see
+    -- neither it nor any reason it is missing.
+    --
+    -- So text goes last on its line, always. A control after text on the same
+    -- line is the bug, whatever the text happens to say today.
+    local KINDS = {
+        { "ui.input(", "control" }, { "ui.button(", "control" },
+        { "ui.checkbox(", "control" }, { "ui.radio(", "control" },
+        { "tc(", "text" }, { "ui.text(", "text" }, { "ui.colored(", "text" },
+    }
+    local function kind_of(line)
+        for _, k in ipairs(KINDS) do
+            if line:find(k[1], 1, true) then return k[2] end
+        end
+        return nil
+    end
+
+    local pushed_off = {}
+    for i, line in ipairs(lines) do
+        if line:find("ui.same_line()", 1, true) then
+            local before
+            for j = i - 1, math.max(i - 4, 1), -1 do
+                before = kind_of(lines[j])
+                if before ~= nil then break end
+            end
+            local after
+            for j = i + 1, math.min(i + 4, #lines) do
+                after = kind_of(lines[j])
+                if after ~= nil then break end
+            end
+            if before == "text" and after == "control" then
+                pushed_off[#pushed_off + 1] = i
+            end
+        end
+    end
+    eq("no control is placed after text on the same line", #pushed_off, 0)
+    if #pushed_off > 0 then
+        io.write("    same_line at: " .. table.concat(pushed_off, ", ") .. "\n")
+        for _, n in ipairs(pushed_off) do
+            io.write("      " .. n .. ": " .. (lines[n - 1] or "") .. "\n")
+        end
     end
 end
 

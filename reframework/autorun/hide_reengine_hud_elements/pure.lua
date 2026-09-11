@@ -200,17 +200,47 @@ function pure.percent(fraction)
 end
 
 -- A probe answers one open question and is independent of every other probe.
--- On its first failure it records the reason and never runs again: the log is
--- overwritten each launch, and a probe failing per frame would bury the
+-- It stops for one of two reasons and both retire it permanently: the log is
+-- overwritten each launch, and a probe reporting once per poll would bury the
 -- findings under a repeated line.
+--
+-- The second reason is the portable one. A probe that never answers is as
+-- useless as one that throws, and on another RE Engine title that is the
+-- expected case rather than a fault: app.GameFlowManager is this game's own
+-- type and will not exist there. A missing singleton does not raise, it
+-- returns nil forever, so retiring on failure alone would never retire it.
+--
+-- Note what this rule does not catch, because session 4 found it: a probe that
+-- answers every time with a value that never changes. via.SceneManager does
+-- exactly that here. It is inert rather than barren, and telling those apart
+-- needs a human looking at the dump, not a rule -- an unchanging answer is
+-- also what a correct probe returns when nothing has happened yet.
+pure.BARREN_POLLS = 40
+
 function pure.new_probe(name)
-    return { name = name, disabled = false, reason = nil, ran = 0 }
+    return { name = name, disabled = false, reason = nil, ran = 0, answered = false }
+end
+
+function pure.probe_stopped(probe, reason)
+    probe.disabled = true
+    probe.reason = reason
+    return probe
 end
 
 function pure.probe_failed(probe, err)
-    probe.disabled = true
-    probe.reason = tostring(err)
-    return probe
+    return pure.probe_stopped(probe, tostring(err))
+end
+
+-- Records what a poll returned, and retires the probe once it is clear that no
+-- poll ever will return anything. Passes the value back so a caller can hand a
+-- result straight through.
+function pure.probe_result(probe, value)
+    if value ~= nil then
+        probe.answered = true
+    elseif not probe.answered and probe.ran >= pure.BARREN_POLLS then
+        pure.probe_stopped(probe, "no value in " .. probe.ran .. " polls")
+    end
+    return value
 end
 
 function pure.probe_summary(probes)

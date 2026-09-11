@@ -3,15 +3,28 @@
 -- Everything the mod learns about the game it is running in, and nothing the
 -- product needs to work: the probes, their traces, and the dump.
 --
--- Each probe answers one question and is independent of every other. On its
--- first failure a probe records the reason and never runs again -- the
--- REFramework log is overwritten every launch, and a probe failing once per
--- frame would bury the findings under a repeated line.
+-- Each probe answers one question and is independent of every other. A probe
+-- retires permanently when it throws and when it has answered nothing for its
+-- first BARREN_POLLS polls -- the REFramework log is overwritten every launch,
+-- and a probe reporting once per poll would bury the findings under a repeated
+-- line. Retiring the barren case is for portability: on an RE Engine title
+-- without app.GameFlowManager the singleton lookup returns nil forever without
+-- ever raising, so failure alone would leave a dead probe being polled.
 --
 -- The scene probes exist because the decision cache is keyed on element
 -- address, and addresses are recycled: something has to say when a load
--- happened. app.GameFlowManager answers; via.SceneManager was polled 13,800
--- times across a session and never produced a value.
+-- happened. app.GameFlowManager answers, and is the one that works here.
+--
+-- via.SceneManager is a different case from either, and the campaign document
+-- described it wrongly until session 4 measured it. It does not fail and it is
+-- not barren: it answers every poll, with a value that has never once changed
+-- -- 1,299 answers in session 4 and no signal, while the flow probe recorded
+-- two transitions in the same window. It is inert here rather than absent, so
+-- neither retirement rule fires and it is polled for the whole session. That
+-- is cheap at this cadence and it stays, because on a title without
+-- GameFlowManager it is the only candidate left. self.report records what it
+-- last answered, so the next session can say whether the value is meaningful
+-- or a constant zero.
 
 local M = {}
 
@@ -45,6 +58,10 @@ function M.new(deps)
             pure.probe_failed(probe, result)
             info("probe disabled: " .. probe.name .. ": " .. probe.reason)
             return nil
+        end
+        pure.probe_result(probe, result)
+        if probe.disabled then
+            info("probe disabled: " .. probe.name .. ": " .. probe.reason)
         end
         return result
     end
@@ -150,9 +167,20 @@ function M.new(deps)
         probe_app_methods()
     end
 
+    -- Polled four times a second rather than sixty. Each poll is a handful of
+    -- reflection calls into game internals, and the question they answer --
+    -- has a load happened -- cannot change faster than a load takes.
+    --
+    -- It debounces the load bounce for free. Session 3 recorded 110 -> 000 ->
+    -- 001 across frames 2483 and 2485: a load registers as two transitions two
+    -- frames apart through an empty intermediate state, and at this cadence
+    -- that intermediate state is simply never sampled.
+    local POLL_EVERY = 15
+
     -- Returns true when a load was detected, which is the caller's cue to
     -- invalidate and to write a dump while there is something to write.
     function self.poll(frame)
+        if (frame % POLL_EVERY) ~= 0 then return false end
         local changed = poll_scene(frame)
         if poll_flow(frame) then changed = true end
         return changed
@@ -165,10 +193,17 @@ function M.new(deps)
     function self.report()
         local state = {}
         for key, pr in pairs(probes) do
-            state[key] = { disabled = pr.disabled, reason = pr.reason, ran = pr.ran }
+            state[key] = { disabled = pr.disabled, reason = pr.reason,
+                           ran = pr.ran, answered = pr.answered }
         end
         return {
             state = state,
+            -- What each probe last answered. A trace records only changes, so
+            -- an empty one cannot tell "never asked" from "answered nil" from
+            -- "answered the same value 1,299 times running". Session 4 turned
+            -- out to be the third and nothing in the dump said so.
+            scene_now = last_scene ~= nil and string.format("%x", last_scene) or nil,
+            flow_now = last_flow,
             findings = self.findings,
             scene_trace = self.scene_trace,
             flow_trace = self.flow_trace,

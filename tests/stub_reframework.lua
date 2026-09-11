@@ -72,7 +72,9 @@ function M.install(opts)
             if ticked ~= nil then return true, ticked end
             return false, v
         end,
-        radio_button = function() return false end,
+        radio_button = function(label)
+            return opts.click ~= nil and label == opts.click
+        end,
         -- REFramework builds differ here and the shape is undocumented:
         -- opts.input_shape picks which one this stub imitates.
         input_text = function(_, v)

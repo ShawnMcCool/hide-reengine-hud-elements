@@ -8,6 +8,15 @@ Finding the element is half the job, so the mod does that part too.
 
 Built for and tested on **Onimusha: Way of the Sword**.
 
+| Before | After |
+|---|---|
+| ![The Absorb Rift prompt drawn across the middle of the screen](media/rift-prompt-shown.jpg) | ![The same view with the prompt gone and the scene untouched](media/rift-prompt-hidden.jpg) |
+
+That is `GUI020016` switched off. The whole prompt goes as one piece — the
+words, the LT glyph, the flourishes either side, the rule across the screen —
+and nothing else goes with it. The diamond marker near the bottom left is still
+drawn, and so is the rest of the HUD.
+
 ## Requirements
 
 - **An RE Engine game.** Developed and tested against *Onimusha: Way of the
@@ -121,6 +130,29 @@ Some elements are containers holding more than one thing, so hiding one can take
 more with it than you wanted. Flash shows you exactly what an entry covers
 before you commit, and the tickbox undoes it if you were wrong.
 
+The before and after at the top of this page is a container behaving well:
+`GUI020016` holds the entire Absorb Rift prompt — five separate pieces of art
+and text — and switching it off takes all five and stops there. A container is
+only a problem when its contents are things you wanted to keep, which is what
+Flash is for.
+
+### When you are done: Playing
+
+The switch near the bottom of the panel has two positions, and it is the only
+one you need after the hunt is over.
+
+**Finding** is what you have been doing. The mod watches every element the game
+draws, calls out new ones in the top-left corner as they appear, and writes a
+diagnostics file as it goes.
+
+**Playing** is your hide list and nothing else. Everything you hid stays
+hidden. The mod stops announcing, stops asking the game questions, and stops
+writing files — nothing is drawn over your game at all.
+
+Leave it on **Playing** once you have found the thing that was annoying you.
+When the next one starts, switch back; it is one press and the element browser
+still has everything that drew while you were playing.
+
 ## Sharing lists
 
 A hide list is a small json file. Export yours, send it to someone, and they
@@ -157,7 +189,7 @@ All in the game's `reframework/data/`:
 | `hide_reengine_hud_elements_diagnostics.json` | What the mod detected about the game |
 
 The hide list is deliberately separate from the settings so you can send it to
-someone without sending your overlay preferences too. It is plain json: a bare
+someone without sending your display preferences too. It is plain json: a bare
 name works as shorthand for an entry with no label, and an unusable line is
 dropped rather than taking the rest of the list with it.
 
@@ -188,10 +220,10 @@ elsewhere, two things to know:
   `app.GameFlowManager` to notice when a level loads, so it can drop cached
   element identities — addresses get reused, and a stale one could name the
   wrong element. That type belongs to this game and will not exist in others.
-  When it is missing the probe switches itself off, says so in the panel under
-  Diagnostics, and the cache falls back to being rebuilt every five seconds
-  instead. Nothing breaks; it just refreshes on a timer rather than on the
-  event.
+  When it is missing — or when it is present but never answers — the probe
+  switches itself off, says so in the panel under Diagnostics, and the cache
+  falls back to being rebuilt every five seconds instead. Nothing breaks; it
+  just refreshes on a timer rather than on the event.
 
 If it does work somewhere else, the diagnostics section will tell you what it
 found, and that is the useful thing to include in a report.
@@ -206,9 +238,11 @@ If an element you hid took something else with it, untick the entry rather than
 deleting it — some elements are containers holding more than one thing, and
 `Flash` will show you what a given entry covers before you commit.
 
-If the on-screen overlay is too small at high resolutions, switch the overlay
-style to `imgui` under **DISPLAY**; it uses REFramework's own font size, which
-you can raise in `re2_fw_config.txt`. The `draw` style ignores that setting.
+While Finding, the mod announces new elements in the top-left corner. If that
+text is too small at high resolutions, switch the feed style to `imgui` under
+**Diagnostics**; it uses REFramework's own font size, which you can raise in
+`re2_fw_config.txt`. The `draw` style ignores that setting. To stop the
+announcements altogether, switch to **Playing**.
 
 The **Diagnostics** section reports what the mod detected. If you're filing an
 issue, that's the useful part to include.
